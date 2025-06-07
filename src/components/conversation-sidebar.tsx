@@ -3,12 +3,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { MessageCircle, Search, Calendar, X, Filter, EyeOff } from 'lucide-react';
-import type { ClaudeConversations, ClaudeConversation } from '@/types/data';
+import { DataParser } from '@/lib/parser';
+import type { 
+  ClaudeConversations, 
+  ClaudeConversation, 
+  ChatGPTConversations, 
+  ChatGPTConversation 
+} from '@/types/data';
 
 interface ConversationSidebarProps {
-  conversations: ClaudeConversations;
-  selectedConversation: ClaudeConversation | null;
-  onSelectConversation: (conversation: ClaudeConversation) => void;
+  conversations: ClaudeConversations | ChatGPTConversations;
+  selectedConversation: ClaudeConversation | ChatGPTConversation | null;
+  onSelectConversation: (conversation: ClaudeConversation | ChatGPTConversation) => void;
   onReset: () => void;
 }
 
@@ -21,35 +27,82 @@ export function ConversationSidebar({
   const [searchQuery, setSearchQuery] = useState('');
   const [hideDeletedConversations, setHideDeletedConversations] = useState(true);
 
+  // Determine conversation type
+  const conversationType = useMemo(() => {
+    if (conversations.length === 0) return 'unknown';
+    const firstConv = conversations[0];
+    if ('uuid' in firstConv && 'chat_messages' in firstConv) return 'claude';
+    if ('id' in firstConv && 'mapping' in firstConv) return 'chatgpt';
+    return 'unknown';
+  }, [conversations]);
+
   const sortedAndFilteredConversations = useMemo(() => {
     let filtered = conversations;
     
-    // Filter out deleted conversations (empty name) if hideDeletedConversations is true
-    if (hideDeletedConversations) {
-      filtered = filtered.filter(conv => conv.name.trim() !== '');
-    }
-    
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(conv => 
-        conv.name.toLowerCase().includes(query) ||
-        conv.uuid.toLowerCase().includes(query)
+    if (conversationType === 'claude') {
+      const claudeConversations = filtered as ClaudeConversations;
+      
+      // Filter out deleted conversations (empty name) if hideDeletedConversations is true
+      if (hideDeletedConversations) {
+        filtered = claudeConversations.filter(conv => conv.name.trim() !== '');
+      }
+      
+      // Apply search filter
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        filtered = (filtered as ClaudeConversations).filter(conv => 
+          conv.name.toLowerCase().includes(query) ||
+          conv.uuid.toLowerCase().includes(query)
+        );
+      }
+      
+      return (filtered as ClaudeConversations).sort((a, b) => 
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
+    } else if (conversationType === 'chatgpt') {
+      const chatgptConversations = filtered as ChatGPTConversations;
+      
+      // ChatGPT doesn't have "deleted" conversations in the same way, but we can filter empty titles
+      if (hideDeletedConversations) {
+        filtered = chatgptConversations.filter(conv => conv.title.trim() !== '');
+      }
+      
+      // Apply search filter
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        filtered = (filtered as ChatGPTConversations).filter(conv => 
+          conv.title.toLowerCase().includes(query) ||
+          conv.id.toLowerCase().includes(query)
+        );
+      }
+      
+      return (filtered as ChatGPTConversations).sort((a, b) => 
+        b.update_time - a.update_time
       );
     }
     
-    return filtered.sort((a, b) => 
-      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-    );
-  }, [conversations, searchQuery, hideDeletedConversations]);
+    return filtered;
+  }, [conversations, searchQuery, hideDeletedConversations, conversationType]);
 
   const totalMessages = useMemo(() => {
-    return conversations.reduce((total, conv) => total + conv.chat_messages.length, 0);
-  }, [conversations]);
+    if (conversationType === 'claude') {
+      return (conversations as ClaudeConversations).reduce((total, conv) => total + conv.chat_messages.length, 0);
+    } else if (conversationType === 'chatgpt') {
+      return (conversations as ChatGPTConversations).reduce((total, conv) => {
+        return total + DataParser.extractChatGPTMessages(conv).length;
+      }, 0);
+    }
+    return 0;
+  }, [conversations, conversationType]);
 
   const deletedConversationsCount = useMemo(() => {
-    return conversations.filter(conv => conv.name.trim() === '').length;
-  }, [conversations]);
+    if (conversationType === 'claude') {
+      return (conversations as ClaudeConversations).filter(conv => conv.name.trim() === '').length;
+    } else if (conversationType === 'chatgpt') {
+      return (conversations as ChatGPTConversations).filter(conv => conv.title.trim() === '').length;
+    }
+    return 0;
+  }, [conversations, conversationType]);
 
   return (
     <div className="h-full bg-muted/50 border-r">
@@ -134,43 +187,92 @@ export function ConversationSidebar({
             </div>
           ) : (
             sortedAndFilteredConversations.map((conversation) => {
-              const isDeleted = conversation.name.trim() === '';
-              return (
-                <div
-                  key={conversation.uuid}
-                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                    selectedConversation?.uuid === conversation.uuid
-                      ? 'bg-primary text-primary-foreground'
-                      : isDeleted
-                      ? 'hover:bg-red-50 border-l-2 border-l-red-200'
-                      : 'hover:bg-muted'
-                  }`}
-                  onClick={() => onSelectConversation(conversation)}
-                >
-                  <div className="space-y-2">
-                    <div className={`font-medium text-sm line-clamp-2 leading-tight ${
-                      isDeleted ? 'text-red-600 italic' : ''
-                    }`}>
-                      {isDeleted ? `[Deleted Conversation]` : conversation.name}
-                    </div>
-                    
-                    <div className="flex items-center gap-3 text-xs opacity-75">
-                      <div className="flex items-center gap-1">
-                        <MessageCircle className="h-3 w-3" />
-                        {conversation.chat_messages.length}
+              if (conversationType === 'claude') {
+                const claudeConv = conversation as ClaudeConversation;
+                const isDeleted = claudeConv.name.trim() === '';
+                const isSelected = selectedConversation && 'uuid' in selectedConversation && selectedConversation.uuid === claudeConv.uuid;
+                
+                return (
+                  <div
+                    key={claudeConv.uuid}
+                    className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                      isSelected
+                        ? 'bg-primary text-primary-foreground'
+                        : isDeleted
+                        ? 'hover:bg-red-50 border-l-2 border-l-red-200'
+                        : 'hover:bg-muted'
+                    }`}
+                    onClick={() => onSelectConversation(claudeConv)}
+                  >
+                    <div className="space-y-2">
+                      <div className={`font-medium text-sm line-clamp-2 leading-tight ${
+                        isDeleted ? 'text-red-600 italic' : ''
+                      }`}>
+                        {isDeleted ? `[Deleted Conversation]` : claudeConv.name}
                       </div>
-                      <div className="flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {new Date(conversation.updated_at).toLocaleDateString()}
+                      
+                      <div className="flex items-center gap-3 text-xs opacity-75">
+                        <div className="flex items-center gap-1">
+                          <MessageCircle className="h-3 w-3" />
+                          {claudeConv.chat_messages.length}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(claudeConv.updated_at).toLocaleDateString()}
+                        </div>
                       </div>
-                    </div>
-                    
-                    <div className="text-xs opacity-60 truncate">
-                      {conversation.uuid.slice(0, 8)}...
+                      
+                      <div className="text-xs opacity-60 truncate">
+                        {claudeConv.uuid.slice(0, 8)}...
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
+                );
+              } else if (conversationType === 'chatgpt') {
+                const chatgptConv = conversation as ChatGPTConversation;
+                const isDeleted = chatgptConv.title.trim() === '';
+                const isSelected = selectedConversation && 'id' in selectedConversation && selectedConversation.id === chatgptConv.id;
+                const messageCount = DataParser.extractChatGPTMessages(chatgptConv).length;
+                
+                return (
+                  <div
+                    key={chatgptConv.id}
+                    className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                      isSelected
+                        ? 'bg-primary text-primary-foreground'
+                        : isDeleted
+                        ? 'hover:bg-red-50 border-l-2 border-l-red-200'
+                        : 'hover:bg-muted'
+                    }`}
+                    onClick={() => onSelectConversation(chatgptConv)}
+                  >
+                    <div className="space-y-2">
+                      <div className={`font-medium text-sm line-clamp-2 leading-tight ${
+                        isDeleted ? 'text-red-600 italic' : ''
+                      }`}>
+                        {isDeleted ? `[Empty Title]` : chatgptConv.title}
+                      </div>
+                      
+                      <div className="flex items-center gap-3 text-xs opacity-75">
+                        <div className="flex items-center gap-1">
+                          <MessageCircle className="h-3 w-3" />
+                          {messageCount}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(chatgptConv.update_time * 1000).toLocaleDateString()}
+                        </div>
+                      </div>
+                      
+                      <div className="text-xs opacity-60 truncate">
+                        {chatgptConv.id.slice(0, 8)}...
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              
+              return null;
             })
           )}
         </div>

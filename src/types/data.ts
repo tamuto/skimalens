@@ -85,6 +85,48 @@ export interface MessageAttachment {
 
 export type ClaudeConversations = ClaudeConversation[];
 
+// ChatGPT conversation types
+export interface ChatGPTConversation {
+  id: string;
+  title: string;
+  create_time: number;
+  update_time: number;
+  mapping: { [key: string]: ChatGPTMappingNode };
+  conversation_id?: string;
+  current_node?: string;
+  gizmo_id?: string;
+  is_archived?: boolean;
+}
+
+export interface ChatGPTMappingNode {
+  id: string;
+  message: ChatGPTMessage | null;
+  parent: string | null;
+  children: string[];
+}
+
+export interface ChatGPTMessage {
+  id: string;
+  author: {
+    role: 'user' | 'assistant' | 'system';
+    name?: string;
+    metadata?: Record<string, unknown>;
+  };
+  create_time: number | null;
+  update_time?: number | null;
+  content?: {
+    content_type: 'text';
+    parts: (string | null | undefined)[];
+  };
+  status: string;
+  end_turn?: boolean | null;
+  weight: number;
+  metadata?: Record<string, unknown>;
+  recipient: string;
+}
+
+export type ChatGPTConversations = ChatGPTConversation[];
+
 export interface ConversationView {
   conversation: ClaudeConversation;
   filteredMessages: ClaudeChatMessage[];
@@ -92,8 +134,21 @@ export interface ConversationView {
   selectedMessageId?: string;
 }
 
+export interface ChatGPTConversationView {
+  conversation: ChatGPTConversation;
+  filteredMessages: ChatGPTMessage[];
+  searchQuery?: string;
+  selectedMessageId?: string;
+}
+
 export interface ConversationsView {
   conversations: ClaudeConversations;
+  selectedConversationId?: string;
+  searchQuery?: string;
+}
+
+export interface ChatGPTConversationsView {
+  conversations: ChatGPTConversations;
   selectedConversationId?: string;
   searchQuery?: string;
 }

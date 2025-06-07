@@ -38,14 +38,14 @@ This is a React application built with:
   - `conversations-list.tsx`: Multiple conversations overview
 - **Utilities**: `@/lib/utils` using class-variance-authority and tailwind-merge
 - **Data parsing**: `@/lib/parser.ts` for JSON/YAML analysis and type detection
-- **Type definitions**: `@/types/data.ts` for Claude conversation structure
+- **Type definitions**: `@/types/data.ts` for Claude and ChatGPT conversation structures
 - **Global styles**: `src/globals.css`
 
 When adding new routes, create files in `src/routes/` and the route tree will be auto-generated.
 
 ## Project Purpose
 
-SkimaLens is a data visualization tool for JSON and YAML data, specifically designed to view and analyze Claude conversation logs (conversation.json). Future versions will support ChatGPT conversation logs and CloudWatch logs.
+SkimaLens is a data visualization tool for JSON and YAML data, specifically designed to view and analyze Claude and ChatGPT conversation logs. It supports Claude conversation.json files and ChatGPT export files, with future plans to support CloudWatch logs.
 
 ## Implementation Status
 
@@ -58,13 +58,17 @@ SkimaLens is a data visualization tool for JSON and YAML data, specifically desi
 - **Responsive design**: Mobile-friendly interface with proper responsive layout
 
 ### 🔄 Current Capabilities
-- **Supported formats**: Claude conversation.json (single or multiple conversations), generic JSON/YAML
-- **Claude conversation features**:
-  - Full conversation metadata display (name, dates, message counts)
-  - Message threading with proper sender identification (human/assistant)
-  - Attachment and file display
-  - Real-time search and filtering
+- **Supported formats**: 
+  - Claude conversation.json (single or multiple conversations)
+  - ChatGPT conversation export files (single or multiple conversations)
+  - Generic JSON/YAML
+- **Conversation features**:
+  - Full conversation metadata display (name/title, dates, message counts)
+  - Message threading with proper sender identification (human/user, assistant)
+  - Universal message viewer supporting both Claude and ChatGPT formats
+  - Real-time search and filtering across messages
   - Message statistics and conversation overview
+  - Claude-specific: Attachment and file display, feedback indicators
 - **File processing**: Client-side only, no server communication required
 
 ### 📋 Remaining Tasks (Priority 2+)
@@ -82,7 +86,7 @@ SkimaLens is a data visualization tool for JSON and YAML data, specifically desi
   - [ ] Conversation flow visualization
 
 #### Priority 3 - Additional Format Support
-- [ ] **ChatGPT conversation format**: Support for ChatGPT export files
+- [x] **ChatGPT conversation format**: Support for ChatGPT export files ✅ **COMPLETED**
 - [ ] **CloudWatch logs format**: Basic log viewing and filtering
 - [ ] **Generic JSON/YAML viewer**: Enhanced view for arbitrary structured data
 - [ ] **CSV export**: Convert conversation data to spreadsheet format
@@ -101,8 +105,14 @@ SkimaLens is a data visualization tool for JSON and YAML data, specifically desi
 - **Message fields**: `uuid`, `text`, `content`, `sender`, `created_at`, `attachments`, `files`
 - **Special handling**: Content blocks (text/thinking), message attachments, feedback
 
+#### ChatGPT export format (Fully Supported)
+- **Structure**: Array of conversation objects or single conversation object
+- **Key fields**: `id`, `title`, `create_time`, `update_time`, `mapping`, `conversation_id`
+- **Message structure**: Tree-based mapping with message nodes containing `id`, `author`, `content`, `create_time`
+- **Author roles**: `user`, `assistant`, `system`
+- **Special handling**: Message mapping tree flattened to chronological order, timestamp conversion from Unix time
+
 #### Future formats (Planned)
-- **ChatGPT export format**: Conversation structure analysis pending
 - **CloudWatch logs**: Basic log entry parsing and display
 - **Generic JSON/YAML**: Free-form structured data with intelligent display
 

@@ -5,6 +5,8 @@ import type {
   DataType, 
   ClaudeConversation,
   ClaudeConversations,
+  ChatGPTConversation,
+  ChatGPTConversations,
   DataMetadata 
 } from '@/types/data';
 
@@ -97,7 +99,17 @@ export class DataParser {
       return 'claude-conversation';
     }
 
-    // Check filename hints (only if not Claude format)
+    // ChatGPT conversation detection (single conversation)
+    if (this.isChatGPTConversation(data)) {
+      return 'chatgpt-conversation';
+    }
+
+    // ChatGPT conversations detection (array of conversations)
+    if (this.isChatGPTConversations(data)) {
+      return 'chatgpt-conversation';
+    }
+
+    // Check filename hints (only if not Claude or ChatGPT format detected)
     if (filename.toLowerCase().includes('chatgpt') || 
         (filename.toLowerCase().includes('conversation') && !filename.toLowerCase().includes('claude'))) {
       return 'chatgpt-conversation';
@@ -172,6 +184,27 @@ export class DataParser {
     return hasClaudeFields;
   }
 
+  private static isChatGPTConversation(data: unknown): data is ChatGPTConversation {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+    
+    const obj = data as Record<string, unknown>;
+    return (
+      typeof obj.title === 'string' &&
+      typeof obj.create_time === 'number' &&
+      typeof obj.update_time === 'number' &&
+      typeof obj.mapping === 'object' &&
+      obj.mapping !== null &&
+      !Array.isArray(obj.mapping)
+    );
+  }
+
+  private static isChatGPTConversations(data: unknown): data is ChatGPTConversations {
+    if (!Array.isArray(data) || data.length === 0) return false;
+    
+    // Check if all items look like ChatGPT conversations
+    return data.every((item) => this.isChatGPTConversation(item));
+  }
+
   private static estimateRecordCount(data: unknown, dataType: DataType): number | undefined {
     if (dataType === 'claude-conversation') {
       if (this.isClaudeConversation(data)) {
@@ -179,6 +212,15 @@ export class DataParser {
       }
       if (this.isClaudeConversations(data)) {
         return data.reduce((total, conv) => total + conv.chat_messages.length, 0);
+      }
+    }
+    
+    if (dataType === 'chatgpt-conversation') {
+      if (this.isChatGPTConversation(data)) {
+        return Object.keys(data.mapping).length;
+      }
+      if (this.isChatGPTConversations(data)) {
+        return data.reduce((total, conv) => total + Object.keys(conv.mapping).length, 0);
       }
     }
     
@@ -197,5 +239,41 @@ export class DataParser {
       return data;
     }
     throw new Error('Invalid Claude conversation format');
+  }
+
+  static validateChatGPTConversation(data: unknown): ChatGPTConversation | ChatGPTConversations {
+    if (this.isChatGPTConversation(data)) {
+      return data;
+    }
+    if (this.isChatGPTConversations(data)) {
+      return data;
+    }
+    throw new Error('Invalid ChatGPT conversation format');
+  }
+
+  static extractChatGPTMessages(conversation: ChatGPTConversation): ChatGPTMessage[] {
+    const messages: ChatGPTMessage[] = [];
+    const mapping = conversation.mapping;
+    
+    // Find all message nodes that aren't null and have valid messages
+    Object.values(mapping).forEach(node => {
+      if (node.message && 
+          node.message.author.role !== 'system' && 
+          node.message.content?.parts && 
+          Array.isArray(node.message.content.parts) &&
+          node.message.content.parts.length > 0 &&
+          node.message.content.parts.some(part => 
+            typeof part === 'string' && part.trim() !== ''
+          )) {
+        messages.push(node.message);
+      }
+    });
+    
+    // Sort by create_time
+    return messages.sort((a, b) => {
+      if (a.create_time === null) return -1;
+      if (b.create_time === null) return 1;
+      return a.create_time - b.create_time;
+    });
   }
 }

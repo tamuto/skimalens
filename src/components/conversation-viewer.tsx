@@ -4,53 +4,124 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { MessageCircle, Search, Calendar, User, Bot, Filter } from 'lucide-react';
 import { MessageItem } from '@/components/message-item';
-import type { ClaudeConversation, ClaudeChatMessage } from '@/types/data';
+import { DataParser } from '@/lib/parser';
+import type { ClaudeConversation, ClaudeChatMessage, ChatGPTConversation, ChatGPTMessage } from '@/types/data';
 
 interface ConversationViewerProps {
-  conversation: ClaudeConversation;
+  conversation: ClaudeConversation | ChatGPTConversation;
+  conversationType: 'claude' | 'chatgpt';
 }
 
-export function ConversationViewer({ conversation }: ConversationViewerProps) {
+export function ConversationViewer({ conversation, conversationType }: ConversationViewerProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [filterSender, setFilterSender] = useState<'all' | 'human' | 'assistant'>('all');
 
+  // Extract messages based on conversation type
+  const allMessages = useMemo(() => {
+    if (conversationType === 'claude') {
+      return (conversation as ClaudeConversation).chat_messages;
+    } else {
+      return DataParser.extractChatGPTMessages(conversation as ChatGPTConversation);
+    }
+  }, [conversation, conversationType]);
+
   const filteredMessages = useMemo(() => {
-    let messages = conversation.chat_messages;
+    let messages = allMessages;
 
     // Filter by sender
     if (filterSender !== 'all') {
-      messages = messages.filter(msg => msg.sender === filterSender);
+      if (conversationType === 'claude') {
+        messages = (messages as ClaudeChatMessage[]).filter(msg => msg.sender === filterSender);
+      } else {
+        const senderRole = filterSender === 'human' ? 'user' : 'assistant';
+        messages = (messages as ChatGPTMessage[]).filter(msg => msg.author.role === senderRole);
+      }
     }
 
     // Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      messages = messages.filter(msg => 
-        msg.text.toLowerCase().includes(query) ||
-        msg.uuid.toLowerCase().includes(query)
-      );
+      if (conversationType === 'claude') {
+        messages = (messages as ClaudeChatMessage[]).filter(msg => 
+          msg.text.toLowerCase().includes(query) ||
+          msg.uuid.toLowerCase().includes(query)
+        );
+      } else {
+        messages = (messages as ChatGPTMessage[]).filter(msg => 
+          (msg.content?.parts?.some(part => 
+            typeof part === 'string' && part.toLowerCase().includes(query)
+          ) || false) ||
+          msg.id.toLowerCase().includes(query)
+        );
+      }
     }
 
-    return messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  }, [conversation.chat_messages, searchQuery, filterSender]);
+    // Sort messages
+    if (conversationType === 'claude') {
+      return (messages as ClaudeChatMessage[]).sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    } else {
+      return (messages as ChatGPTMessage[]).sort((a, b) => {
+        if (a.create_time === null) return -1;
+        if (b.create_time === null) return 1;
+        return a.create_time - b.create_time;
+      });
+    }
+  }, [allMessages, searchQuery, filterSender, conversationType]);
 
   const conversationStats = useMemo(() => {
-    const messages = conversation.chat_messages;
-    const humanCount = messages.filter(m => m.sender === 'human').length;
-    const assistantCount = messages.filter(m => m.sender === 'assistant').length;
-    const feedbackCount = messages.filter(m => m.chat_feedback).length;
+    const messages = allMessages;
     
-    return {
-      total: messages.length,
-      human: humanCount,
-      assistant: assistantCount,
-      feedback: feedbackCount
-    };
-  }, [conversation.chat_messages]);
+    if (conversationType === 'claude') {
+      const claudeMessages = messages as ClaudeChatMessage[];
+      const humanCount = claudeMessages.filter(m => m.sender === 'human').length;
+      const assistantCount = claudeMessages.filter(m => m.sender === 'assistant').length;
+      const feedbackCount = claudeMessages.filter(m => m.chat_feedback).length;
+      
+      return {
+        total: messages.length,
+        human: humanCount,
+        assistant: assistantCount,
+        feedback: feedbackCount
+      };
+    } else {
+      const chatgptMessages = messages as ChatGPTMessage[];
+      const humanCount = chatgptMessages.filter(m => m.author.role === 'user').length;
+      const assistantCount = chatgptMessages.filter(m => m.author.role === 'assistant').length;
+      
+      return {
+        total: messages.length,
+        human: humanCount,
+        assistant: assistantCount,
+        feedback: 0 // ChatGPT doesn't have feedback in the exported format
+      };
+    }
+  }, [allMessages, conversationType]);
 
-  const createdDate = new Date(conversation.created_at).toLocaleDateString();
-  const updatedDate = new Date(conversation.updated_at).toLocaleDateString();
+  // Get conversation metadata
+  const { title, createdDate, updatedDate, conversationId } = useMemo(() => {
+    if (conversationType === 'claude') {
+      const conv = conversation as ClaudeConversation;
+      return {
+        title: conv.name,
+        createdDate: new Date(conv.created_at).toLocaleDateString(),
+        updatedDate: new Date(conv.updated_at).toLocaleDateString(),
+        conversationId: conv.uuid
+      };
+    } else {
+      const conv = conversation as ChatGPTConversation;
+      return {
+        title: conv.title,
+        createdDate: new Date(conv.create_time * 1000).toLocaleDateString(),
+        updatedDate: new Date(conv.update_time * 1000).toLocaleDateString(),
+        conversationId: conv.id
+      };
+    }
+  }, [conversation, conversationType]);
+
+  const assistantName = conversationType === 'claude' ? 'Claude' : 'ChatGPT';
 
   return (
     <div className="space-y-6">
@@ -59,9 +130,9 @@ export function ConversationViewer({ conversation }: ConversationViewerProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MessageCircle className="h-5 w-5" />
-            {conversation.name}
+            {title}
           </CardTitle>
-          <CardDescription>UUID: {conversation.uuid}</CardDescription>
+          <CardDescription>ID: {conversationId}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
@@ -72,7 +143,7 @@ export function ConversationViewer({ conversation }: ConversationViewerProps) {
               <span className="font-medium">Updated:</span> {updatedDate}
             </div>
             <div>
-              <span className="font-medium">Messages:</span> {conversation.chat_messages.length}
+              <span className="font-medium">Messages:</span> {allMessages.length}
             </div>
           </div>
 
@@ -87,12 +158,14 @@ export function ConversationViewer({ conversation }: ConversationViewerProps) {
             </div>
             <div className="bg-green-50 p-3 rounded-lg text-center">
               <div className="text-2xl font-bold text-green-600">{conversationStats.assistant}</div>
-              <div className="text-xs text-muted-foreground">Assistant Messages</div>
+              <div className="text-xs text-muted-foreground">{assistantName} Messages</div>
             </div>
-            <div className="bg-orange-50 p-3 rounded-lg text-center">
-              <div className="text-2xl font-bold text-orange-600">{conversationStats.feedback}</div>
-              <div className="text-xs text-muted-foreground">With Feedback</div>
-            </div>
+            {conversationType === 'claude' && (
+              <div className="bg-orange-50 p-3 rounded-lg text-center">
+                <div className="text-2xl font-bold text-orange-600">{conversationStats.feedback}</div>
+                <div className="text-xs text-muted-foreground">With Feedback</div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -133,7 +206,7 @@ export function ConversationViewer({ conversation }: ConversationViewerProps) {
                 onClick={() => setFilterSender('assistant')}
               >
                 <Bot className="h-4 w-4 mr-1" />
-                Claude
+                {assistantName}
               </Button>
             </div>
           </div>
@@ -173,16 +246,23 @@ export function ConversationViewer({ conversation }: ConversationViewerProps) {
             </CardContent>
           </Card>
         ) : (
-          filteredMessages.map((message) => (
-            <MessageItem
-              key={message.uuid}
-              message={message}
-              isSelected={selectedMessageId === message.uuid}
-              onClick={() => setSelectedMessageId(
-                selectedMessageId === message.uuid ? null : message.uuid
-              )}
-            />
-          ))
+          filteredMessages.map((message) => {
+            const messageId = conversationType === 'claude' 
+              ? (message as ClaudeChatMessage).uuid 
+              : (message as ChatGPTMessage).id;
+            
+            return (
+              <MessageItem
+                key={messageId}
+                message={message}
+                messageType={conversationType}
+                isSelected={selectedMessageId === messageId}
+                onClick={() => setSelectedMessageId(
+                  selectedMessageId === messageId ? null : messageId
+                )}
+              />
+            );
+          })
         )}
       </div>
     </div>
