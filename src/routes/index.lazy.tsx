@@ -2,10 +2,10 @@ import { createLazyFileRoute } from '@tanstack/react-router';
 import React, { useState } from 'react';
 import { FileUpload } from '@/components/file-upload';
 import { ConversationViewer } from '@/components/conversation-viewer';
-import { ConversationsList } from '@/components/conversations-list';
+import { ConversationSidebar } from '@/components/conversation-sidebar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { AlertCircle, ArrowLeft } from 'lucide-react';
+import { AlertCircle, Upload } from 'lucide-react';
 import { DataParser } from '@/lib/parser';
 import type { ParsedData, ClaudeConversation, ClaudeConversations } from '@/types/data';
 
@@ -47,15 +47,30 @@ function Index() {
   const renderContent = () => {
     if (error) {
       return (
-        <Alert className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <Alert className="max-w-md">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        </div>
       );
     }
 
     if (!parsedData) {
-      return <FileUpload onDataLoaded={handleDataLoaded} onError={handleError} />;
+      return (
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="w-full max-w-2xl">
+            <div className="text-center mb-8">
+              <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <h2 className="text-2xl font-semibold mb-2">Upload Conversation Data</h2>
+              <p className="text-muted-foreground">
+                Upload your Claude conversation logs to get started with analysis.
+              </p>
+            </div>
+            <FileUpload onDataLoaded={handleDataLoaded} onError={handleError} />
+          </div>
+        </div>
+      );
     }
 
     if (parsedData.type === 'claude-conversation') {
@@ -66,117 +81,83 @@ function Index() {
         const isSingleConversation = !Array.isArray(conversationData);
         const conversations = isSingleConversation ? [conversationData as ClaudeConversation] : conversationData as ClaudeConversations;
         
-        // If viewing a specific conversation
-        if (selectedConversation) {
-          return (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-4">
-                  <Button variant="outline" size="sm" onClick={handleBackToList}>
-                    <ArrowLeft className="h-4 w-4 mr-1" />
-                    Back to List
-                  </Button>
-                  <div>
-                    <h2 className="text-lg font-semibold">Conversation Details</h2>
-                    <p className="text-sm text-muted-foreground">
-                      File: {parsedData.metadata.filename}
+        // Two-pane layout for conversations
+        return (
+          <div className="flex h-[calc(100vh-120px)]">
+            {/* Left Sidebar */}
+            <div className="w-80 flex-shrink-0">
+              <ConversationSidebar
+                conversations={conversations}
+                selectedConversation={selectedConversation}
+                onSelectConversation={handleSelectConversation}
+                onReset={handleReset}
+              />
+            </div>
+            
+            {/* Right Content Area */}
+            <div className="flex-1 overflow-hidden">
+              {selectedConversation ? (
+                <div className="h-full overflow-y-auto p-6">
+                  <ConversationViewer conversation={selectedConversation} />
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full text-muted-foreground">
+                  <div className="text-center">
+                    <div className="text-6xl mb-4">💬</div>
+                    <h3 className="text-lg font-medium mb-2">Select a Conversation</h3>
+                    <p className="text-sm">
+                      Choose a conversation from the sidebar to view its details and messages.
                     </p>
+                    <div className="mt-4 text-xs">
+                      {conversations.length} conversation{conversations.length !== 1 ? 's' : ''} loaded from {parsedData.metadata.filename}
+                    </div>
                   </div>
                 </div>
-                <button
-                  onClick={handleReset}
-                  className="text-sm text-muted-foreground hover:text-foreground underline"
-                >
-                  Load Different File
-                </button>
-              </div>
-              <ConversationViewer conversation={selectedConversation} />
+              )}
             </div>
-          );
-        }
-        
-        // Show list of conversations (or single conversation if only one)
-        if (conversations.length === 1) {
-          return (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-lg font-semibold">Single Conversation Analysis</h2>
-                  <p className="text-sm text-muted-foreground">
-                    File: {parsedData.metadata.filename} • 
-                    Parsed: {parsedData.metadata.parseTime.toLocaleString()}
-                  </p>
-                </div>
-                <button
-                  onClick={handleReset}
-                  className="text-sm text-muted-foreground hover:text-foreground underline"
-                >
-                  Load Different File
-                </button>
-              </div>
-              <ConversationViewer conversation={conversations[0]} />
-            </div>
-          );
-        }
-        
-        // Multiple conversations
-        return (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-lg font-semibold">Conversations Overview</h2>
-                <p className="text-sm text-muted-foreground">
-                  File: {parsedData.metadata.filename} • 
-                  {conversations.length} conversations • 
-                  Parsed: {parsedData.metadata.parseTime.toLocaleString()}
-                </p>
-              </div>
-              <button
-                onClick={handleReset}
-                className="text-sm text-muted-foreground hover:text-foreground underline"
-              >
-                Load Different File
-              </button>
-            </div>
-            <ConversationsList 
-              conversations={conversations} 
-              onSelectConversation={handleSelectConversation}
-            />
           </div>
         );
         
       } catch (validationError) {
         return (
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Failed to validate Claude conversation format: {validationError instanceof Error ? validationError.message : 'Unknown error'}
-            </AlertDescription>
-          </Alert>
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <Alert className="max-w-md">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Failed to validate Claude conversation format: {validationError instanceof Error ? validationError.message : 'Unknown error'}
+              </AlertDescription>
+            </Alert>
+          </div>
         );
       }
     }
 
     return (
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          Data type "{parsedData.type}" is not yet supported. Currently only Claude conversation logs are supported.
-        </AlertDescription>
-      </Alert>
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Alert className="max-w-md">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Data type "{parsedData.type}" is not yet supported. Currently only Claude conversation logs are supported.
+          </AlertDescription>
+        </Alert>
+      </div>
     );
   };
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">SkimaLens</h1>
-        <p className="text-muted-foreground mt-2">
-          Data visualization tool for JSON and YAML files. Upload your Claude conversation logs to get started.
-        </p>
-      </div>
+    <div className="h-screen flex flex-col">
+      {!parsedData && (
+        <div className="p-6 border-b">
+          <h1 className="text-3xl font-bold tracking-tight">SkimaLens</h1>
+          <p className="text-muted-foreground mt-2">
+            Data visualization tool for JSON and YAML files. Upload your Claude conversation logs to get started.
+          </p>
+        </div>
+      )}
       
-      {renderContent()}
+      <div className="flex-1 overflow-hidden">
+        {renderContent()}
+      </div>
     </div>
   );
 }
