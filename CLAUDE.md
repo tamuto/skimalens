@@ -7,16 +7,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `pnpm run dev` - Start development server (will use available port, typically 8080)
 - `pnpm run build` - Build for production  
 - `pnpm install` - Install dependencies (project uses pnpm)
+- `pnpm run cli` - Run CLI locally with ts-node
+- `pnpm run start` - Alias for CLI command
+
+## CLI Usage
+
+SkimaLens can be used as a command-line tool for quick visualization of conversation files:
+
+### Installation
+```bash
+# Install from npm registry (when published)
+pnpx @infodb/skimalens
+
+# Or install globally for repeated use
+pnpm add -g @infodb/skimalens
+```
+
+### Usage Examples
+```bash
+# Start with file upload interface
+pnpx @infodb/skimalens
+
+# Open specific conversation file directly
+pnpx @infodb/skimalens /path/to/conversation.json
+pnpx @infodb/skimalens /path/to/chatgpt-export.json
+pnpx @infodb/skimalens /path/to/data.yaml
+
+# Supported file types: .json, .yaml, .yml
+```
+
+### CLI Features
+- **Automatic file validation**: Checks file existence and supported formats
+- **Browser auto-launch**: Opens default browser with the visualization
+- **Direct file loading**: Bypasses upload interface when file is specified
+- **Error handling**: Clear error messages for invalid files or paths
+
+### Technical Requirements
+- **Node.js**: Version 16+ required for ts-node execution
+- **TypeScript**: CLI implemented in TypeScript with ts-node
+- **Package Manager**: Designed for pnpm (also works with npm/yarn)
 
 ## Architecture
 
 This is a React application built with:
+- **TypeScript** as the primary language (with ts-node for CLI execution)
 - **Rsbuild** as the build tool (Rspack-based)
 - **TanStack Router** for file-based routing with type safety
 - **Tailwind CSS** for styling
 - **shadcn/ui** components (New York style, configured in components.json)
 - **js-yaml** for YAML parsing
 - **react-dropzone** for file upload functionality
+- **pnpm** as the preferred package manager
 
 ### Key Architecture Points
 
@@ -56,6 +97,7 @@ SkimaLens is a data visualization tool for JSON and YAML data, specifically desi
 - **Search and filter capabilities**: Full-text search, sender filtering, conversation navigation
 - **Multiple conversation support**: Handle both single conversations and conversation arrays
 - **Responsive design**: Mobile-friendly interface with proper responsive layout
+- **CLI Interface**: TypeScript-based command-line tool with file argument support
 
 ### 🔄 Current Capabilities
 - **Supported formats**: 
@@ -70,6 +112,7 @@ SkimaLens is a data visualization tool for JSON and YAML data, specifically desi
   - Message statistics and conversation overview
   - Claude-specific: Attachment and file display, feedback indicators
 - **File processing**: Client-side only, no server communication required
+- **CLI functionality**: Direct file loading via command-line arguments with browser auto-launch
 
 ### 📋 Remaining Tasks (Priority 2+)
 

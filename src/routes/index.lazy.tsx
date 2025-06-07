@@ -1,5 +1,5 @@
 import { createLazyFileRoute } from '@tanstack/react-router';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FileUpload } from '@/components/file-upload';
 import { ConversationViewer } from '@/components/conversation-viewer';
 import { ConversationSidebar } from '@/components/conversation-sidebar';
@@ -24,6 +24,45 @@ function Index() {
   const [error, setError] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<ClaudeConversation | ChatGPTConversation | null>(null);
   const [conversationType, setConversationType] = useState<'claude' | 'chatgpt' | null>(null);
+
+  // Check for CLI-provided file
+  useEffect(() => {
+    const checkCliFile = async () => {
+      // Check if file is provided via CLI
+      const urlParams = new URLSearchParams(window.location.search);
+      const cliFileParam = urlParams.get('file');
+      
+      if (cliFileParam === 'cli-provided') {
+        try {
+          // Fetch file from CLI server
+          const response = await fetch('/api/file');
+          if (!response.ok) {
+            throw new Error(`Failed to load file: ${response.statusText}`);
+          }
+          
+          const data = await response.json();
+          const fileContent = data.content;
+          const fileName = data.filename || 'CLI-provided file';
+          
+          // Parse the file content
+          const uploadResult = {
+            filename: fileName,
+            content: fileContent,
+            type: fileName.endsWith('.yaml') || fileName.endsWith('.yml') ? 'yaml' as const : 'json' as const,
+            size: fileContent.length,
+            lastModified: new Date()
+          };
+          const result = DataParser.parseData(uploadResult);
+          
+          handleDataLoaded(result);
+        } catch (err) {
+          handleError(`Failed to load CLI file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+      }
+    };
+
+    checkCliFile();
+  }, []);
 
   const handleDataLoaded = (data: ParsedData) => {
     setError(null);

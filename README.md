@@ -51,43 +51,68 @@ SkimaLensは、構造化データを読み込んで直感的に参照・可視�
 
 ## 🚀 クイックスタート
 
-### インストール
+### 💻 CLI使用（推奨）
+
+SkimaLensはコマンドラインツールとして使用できます：
+
+```bash
+# ファイル指定なし（アップロード画面）
+pnpx @infodb/skimalens
+
+# ファイル指定あり（直接ビューアー起動）
+pnpx @infodb/skimalens /path/to/conversation.json
+pnpx @infodb/skimalens /path/to/chatgpt-export.json
+pnpx @infodb/skimalens /path/to/data.yaml
+```
+
+#### CLI特徴
+- **🚀 独立したWebサーバー**: rsbuild/pnpmに依存しない軽量サーバー
+- **📁 直接ファイルアクセス**: ローカルファイルを安全に読み込み
+- **🌐 自動ブラウザ起動**: VSCode環境でも適切に対応
+- **⚡ 高速起動**: 必要最小限の依存関係で即座に開始
+- **🛑 グレースフルシャットダウン**: Ctrl+Cで確実にサーバー停止
+
+### 🛠️ 開発者向け
 
 ```bash
 # 依存関係をインストール
 pnpm install
-# または
-npm install
-```
 
-### 開発
-
-```bash
 # 開発サーバーを起動 (通常はポート8080)
 pnpm run dev
-```
 
-### ビルド
-
-```bash
 # 本番用ビルド
 pnpm run build
+
+# CLIをローカルで実行
+pnpm run cli [ファイルパス]
 ```
 
 ## 🛠️ 技術スタック
 
 | 分野 | 技術 | 説明 |
 |------|------|------|
+| **Language** | TypeScript | 完全型安全な開発環境 |
 | **Frontend** | React 19 + TypeScript | 型安全性を重視したモダンフロントエンド |
 | **Build** | Rsbuild (Rspack) | 高速ビルドツール |
+| **CLI Server** | Node.js HTTP Server | 独立した軽量Webサーバー |
 | **Routing** | TanStack Router | ファイルベースルーティング with 型安全性 |
 | **UI Framework** | Shadcn/UI + Tailwind CSS | 美しく一貫性のあるデザインシステム |
 | **Icons** | Lucide React + Radix UI Icons | 豊富で軽量なアイコンセット |
 | **File Processing** | js-yaml + react-dropzone | ファイル解析とアップロード処理 |
+| **Package Manager** | pnpm | 高速で効率的な依存関係管理 |
 
 ## 🎨 使い方
 
 ### 基本操作
+
+#### 🖥️ CLI使用時
+1. **ファイル指定**: コマンドライン引数でファイルパスを指定
+2. **自動起動**: ブラウザが自動で開き、即座にデータが読み込まれる
+3. **データ探索**: 左サイドバーで会話一覧を確認、右ペインで詳細を表示
+4. **終了**: Ctrl+Cでサーバーを停止
+
+#### 🌐 Webアプリ使用時
 1. **ファイルをアップロード**: ドラッグ&ドロップまたはファイル選択でJSON/YAMLファイルを読み込み
 2. **データを探索**: 左サイドバーで会話一覧を確認、右ペインで詳細を表示
 3. **隙間を発見**: フィルタ機能で削除済みデータや特定のパターンを発見
@@ -124,6 +149,39 @@ pnpm run build
 - **📡 ネットワーク送信なし**: ファイル内容が外部サーバーに送信されることは一切ありません
 - **🗑️ セッション限定**: ページをリロードするとデータは完全に削除されます
 - **⚡ クライアントサイド分析**: 高速処理と完全なプライバシー保護を両立
+
+## 🔧 トラブルシューティング
+
+### CLI関連
+
+#### ❓ VSCodeでブラウザが開かない
+VSCode環境では自動ブラウザ起動がスキップされます。コンソールに表示されるURLを手動でブラウザで開いてください。
+
+#### ❓ Ctrl+Cが効かない
+- 1回目のCtrl+C: グレースフルシャットダウン
+- 2回目のCtrl+C: 強制終了
+- 大きなファイル処理中でも3秒以内に確実に停止します
+
+#### ❓ "Build not found"エラー
+```bash
+# ビルドを実行してからCLIを使用
+pnpm run build
+pnpm run cli /path/to/file.json
+```
+
+#### ❓ ファイルが見つからない
+- 絶対パスまたは相対パスを正確に指定してください
+- サポートされているファイル形式: `.json`, `.yaml`, `.yml`
+
+### 一般的な問題
+
+#### ❓ 大きなファイルの処理が遅い
+- ファイルサイズが45MB以上の場合、読み込みに時間がかかる場合があります
+- 非同期処理により、UIは応答可能な状態を保ちます
+
+#### ❓ 会話が正しく認識されない
+- Claude形式: `uuid`, `name`, `chat_messages`フィールドが必要
+- ChatGPT形式: `title`, `create_time`, `mapping`フィールドが必要
 
 ---
 
