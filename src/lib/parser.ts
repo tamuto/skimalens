@@ -1,13 +1,14 @@
 import { load as yamlLoad } from 'js-yaml';
-import type { 
-  FileUploadResult, 
-  ParsedData, 
-  DataType, 
+import type {
+  FileUploadResult,
+  ParsedData,
+  DataType,
   ClaudeConversation,
   ClaudeConversations,
   ChatGPTConversation,
   ChatGPTConversations,
-  DataMetadata 
+  ChatGPTMessage,
+  DataMetadata
 } from '@/types/data';
 
 export class DataParser {

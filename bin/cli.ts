@@ -5,42 +5,240 @@ import * as path from 'path';
 import * as http from 'http';
 import * as url from 'url';
 import { spawn } from 'child_process';
+import { load as yamlLoad } from 'js-yaml';
+import { MarkdownExporter, type FilenameFormat, type ExportFormat } from './exporter';
+import { DataParser } from '../src/lib/parser';
 
 interface ServerOptions {
   port: number;
   filePath?: string;
 }
 
+interface CliOptions {
+  exportDir?: string;
+  filenameFormat: FilenameFormat;
+  exportFormat: ExportFormat;
+  filePath?: string;
+  showHelp?: boolean;
+}
+
 function main(): void {
-  const args = process.argv.slice(2);
-  const filePath = args[0];
+  const options = parseArgs();
+
+  if (options.showHelp) {
+    showHelp();
+    process.exit(0);
+  }
+
   const port = 8080;
 
+  // Validate file if provided
   let validatedFilePath: string | undefined;
+  if (options.filePath) {
+    validatedFilePath = validateFilePath(options.filePath);
+  }
 
-  if (filePath) {
-    // File specified - validate
-    const fullPath = path.resolve(filePath);
-    
-    if (!fs.existsSync(fullPath)) {
-      console.error(`Error: File not found: ${fullPath}`);
+  // Export mode
+  if (options.exportDir) {
+    if (!validatedFilePath) {
+      console.error('Error: File path is required when using --export option');
+      showHelp();
       process.exit(1);
     }
 
-    const ext = path.extname(fullPath).toLowerCase();
-    if (!['.json', '.yaml', '.yml'].includes(ext)) {
-      console.error(`Error: Unsupported file type. Please use .json, .yaml, or .yml files.`);
-      process.exit(1);
-    }
+    exportToMarkdown(validatedFilePath, options.exportDir, options.filenameFormat, options.exportFormat);
+    return;
+  }
 
-    validatedFilePath = fullPath;
-    console.log(`Starting SkimaLens with file: ${fullPath}`);
+  // Server mode (default)
+  if (validatedFilePath) {
+    console.log(`Starting SkimaLens with file: ${validatedFilePath}`);
   } else {
     console.log('Starting SkimaLens...');
   }
 
-  // Start standalone web server
   startServer({ port, filePath: validatedFilePath });
+}
+
+function parseArgs(): CliOptions {
+  const args = process.argv.slice(2);
+  const options: CliOptions = {
+    filenameFormat: 'title',
+    exportFormat: 'markdown'
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // Skip standalone "--" (used by npm/pnpm to separate script args)
+    if (arg === '--') {
+      continue;
+    }
+
+    if (arg === '--help' || arg === '-h') {
+      options.showHelp = true;
+      return options;
+    }
+
+    if (arg === '--export') {
+      if (i + 1 >= args.length) {
+        console.error('Error: --export requires a directory path');
+        process.exit(1);
+      }
+      options.exportDir = args[++i];
+      continue;
+    }
+
+    if (arg === '--filename-format') {
+      if (i + 1 >= args.length) {
+        console.error('Error: --filename-format requires a value (title or id)');
+        process.exit(1);
+      }
+      const format = args[++i];
+      if (format !== 'title' && format !== 'id') {
+        console.error('Error: --filename-format must be either "title" or "id"');
+        process.exit(1);
+      }
+      options.filenameFormat = format;
+      continue;
+    }
+
+    if (arg === '--export-format') {
+      if (i + 1 >= args.length) {
+        console.error('Error: --export-format requires a value (markdown, json, or yaml)');
+        process.exit(1);
+      }
+      const format = args[++i];
+      if (format !== 'markdown' && format !== 'json' && format !== 'yaml') {
+        console.error('Error: --export-format must be either "markdown", "json", or "yaml"');
+        process.exit(1);
+      }
+      options.exportFormat = format as ExportFormat;
+      continue;
+    }
+
+    if (arg.startsWith('--')) {
+      console.error(`Error: Unknown option: ${arg}`);
+      showHelp();
+      process.exit(1);
+    }
+
+    // Positional argument (file path)
+    if (!options.filePath) {
+      options.filePath = arg;
+    } else {
+      console.error(`Error: Multiple file paths specified: ${options.filePath}, ${arg}`);
+      process.exit(1);
+    }
+  }
+
+  return options;
+}
+
+function validateFilePath(filePath: string): string {
+  const fullPath = path.resolve(filePath);
+
+  if (!fs.existsSync(fullPath)) {
+    console.error(`Error: File not found: ${fullPath}`);
+    process.exit(1);
+  }
+
+  const ext = path.extname(fullPath).toLowerCase();
+  if (!['.json', '.yaml', '.yml'].includes(ext)) {
+    console.error(`Error: Unsupported file type. Please use .json, .yaml, or .yml files.`);
+    process.exit(1);
+  }
+
+  return fullPath;
+}
+
+async function exportToMarkdown(
+  filePath: string,
+  exportDir: string,
+  filenameFormat: FilenameFormat,
+  exportFormat: ExportFormat
+): Promise<void> {
+  try {
+    console.log(`Reading file: ${filePath}`);
+    const content = fs.readFileSync(filePath, 'utf-8');
+
+    // Parse file
+    const ext = path.extname(filePath).toLowerCase();
+    let data: unknown;
+
+    if (ext === '.json') {
+      data = JSON.parse(content);
+    } else {
+      data = yamlLoad(content);
+    }
+
+    // Detect data type
+    const uploadResult = {
+      filename: path.basename(filePath),
+      content,
+      type: ext === '.json' ? 'json' as const : 'yaml' as const,
+      size: content.length,
+      lastModified: new Date()
+    };
+
+    const parsed = DataParser.parseData(uploadResult);
+    console.log(`Detected data type: ${parsed.type}`);
+
+    if (parsed.type !== 'claude-conversation' && parsed.type !== 'chatgpt-conversation') {
+      console.error(`Error: Unsupported data type for export: ${parsed.type}`);
+      console.error('Only Claude and ChatGPT conversations can be exported.');
+      process.exit(1);
+    }
+
+    // Export
+    const exporter = new MarkdownExporter({
+      outputDir: exportDir,
+      filenameFormat,
+      exportFormat
+    });
+
+    await exporter.export(data, parsed.type);
+    console.log(`\nExport completed successfully to: ${path.resolve(exportDir)}`);
+  } catch (error) {
+    console.error(`Error during export: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+}
+
+function showHelp(): void {
+  console.log(`
+SkimaLens - Claude and ChatGPT conversation viewer and exporter
+
+USAGE:
+  skimalens [OPTIONS] [FILE]
+
+OPTIONS:
+  --export <directory>              Export conversations to files in the specified directory
+  --export-format <format>          Set export format (default: markdown)
+                                    - markdown: Export as Markdown files
+                                    - json: Export as formatted JSON files
+                                    - yaml: Export as formatted YAML files
+  --filename-format <title|id>      Set filename format for exported files (default: title)
+                                    - title: Use conversation title as filename
+                                    - id: Use conversation ID as filename
+  -h, --help                        Show this help message
+
+EXAMPLES:
+  # Start web viewer with a conversation file
+  skimalens conversations.json
+
+  # Export conversations as Markdown using titles as filenames (default)
+  skimalens --export ./output conversations.json
+
+  # Export conversations as formatted JSON
+  skimalens --export ./output --export-format json conversations.json
+
+  # Export conversations as formatted YAML with ID-based filenames
+  skimalens --export ./output --export-format yaml --filename-format id conversations.json
+
+  # Start web viewer without a file (upload file in browser)
+  skimalens
+`);
 }
 
 function startServer(options: ServerOptions): void {
