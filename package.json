@@ -1,6 +1,6 @@
 {
   "name": "@infodb/skimalens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A data visualization tool for JSON and YAML files, specifically designed to view and analyze Claude and ChatGPT conversation logs",
   "keywords": [
     "claude",
