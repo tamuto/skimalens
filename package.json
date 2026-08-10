@@ -14,13 +14,13 @@
     "typescript",
     "react"
   ],
-  "homepage": "https://github.com/infodb/skimalens#readme",
+  "homepage": "https://github.com/tamuto/skimalens#readme",
   "bugs": {
-    "url": "https://github.com/infodb/skimalens/issues"
+    "url": "https://github.com/tamuto/skimalens/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/infodb/skimalens.git"
+    "url": "git+https://github.com/tamuto/skimalens.git"
   },
   "license": "MIT",
   "author": "tamuto <tamuto@infodb.jp>",
