@@ -17,10 +17,11 @@ export function MessageItem({ message, isSelected, onClick, messageType = 'claud
     : (message as ChatGPTMessage).author.role === 'user';
   
   // Get timestamp
+  const createTime = messageType === 'claude' ? null : (message as ChatGPTMessage).create_time;
   const timestamp = messageType === 'claude'
     ? new Date((message as ClaudeChatMessage).created_at).toLocaleString()
-    : (message as ChatGPTMessage).create_time 
-      ? new Date((message as ChatGPTMessage).create_time * 1000).toLocaleString()
+    : createTime
+      ? new Date(createTime * 1000).toLocaleString()
       : 'Unknown time';
   
   // Get message text
