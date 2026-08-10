@@ -24,6 +24,8 @@ function exporterFor(
 	exportFormat: ExportFormat = 'markdown',
 	filenameFormat: FilenameFormat = 'title',
 ) {
+	// Most filename tests exercise the sanitiser, which is easiest to read with
+	// titles; the "id" default of the CLI is covered separately below.
 	return new ConversationExporter({ outputDir, filenameFormat, exportFormat });
 }
 
@@ -113,12 +115,26 @@ describe('filename generation', () => {
 		expect(writtenFiles()).toEqual(['report.md']);
 	});
 
-	it('falls back to untitled for an empty or symbol-only title', async () => {
-		const data = [claudeConversation('', 'a'), claudeConversation('---', 'b')];
+	it('falls back to the conversation id when the title is empty', async () => {
+		// Deleted Claude conversations keep an empty name.
+		const data = [claudeConversation('', 'uuid-1'), claudeConversation('---', 'uuid-2')];
 
 		await exporterFor().export(data, 'claude-conversation');
 
-		expect(writtenFiles()).toEqual(['untitled-2.md', 'untitled.md']);
+		expect(writtenFiles()).toEqual(['uuid-1.md', 'uuid-2.md']);
+	});
+
+	it('falls back to untitled when neither title nor id is usable', async () => {
+		await exporterFor().export([claudeConversation('', '')], 'claude-conversation');
+		expect(writtenFiles()).toEqual(['untitled.md']);
+	});
+
+	it('falls back to the title when the conversation has no id', async () => {
+		const conversation = chatgptConversation('タイトルのみ', '');
+
+		await exporterFor('markdown', 'id').export([conversation], 'chatgpt-conversation');
+
+		expect(writtenFiles()).toEqual(['タイトルのみ.md']);
 	});
 
 	it('uses the conversation id when filenameFormat is id', async () => {
@@ -128,6 +144,17 @@ describe('filename generation', () => {
 		);
 
 		expect(writtenFiles()).toEqual(['uuid-1234.md']);
+	});
+
+	it('keeps ids of different conversations apart even when titles collide', async () => {
+		const data = [
+			claudeConversation('設計メモ', 'uuid-jan'),
+			claudeConversation('設計メモ', 'uuid-feb'),
+		];
+
+		await exporterFor('markdown', 'id').export(data, 'claude-conversation');
+
+		expect(writtenFiles()).toEqual(['uuid-feb.md', 'uuid-jan.md']);
 	});
 });
 

@@ -41,6 +41,9 @@ export interface ExportResult {
 const MAX_BASENAME_CHARS = 80;
 const MAX_BASENAME_BYTES = 200;
 
+/** Used when neither the conversation title nor its id yields a usable name. */
+const UNTITLED = 'untitled';
+
 /** Device names that cannot be used as a file name on Windows. */
 const WINDOWS_RESERVED_NAMES = new Set([
   'CON', 'PRN', 'AUX', 'NUL',
@@ -309,9 +312,16 @@ export class ConversationExporter {
 
   private generateFilename(title: string, id: string): string {
     const extension = this.options.exportFormat === 'markdown' ? 'md' : this.options.exportFormat;
-    const baseName = this.options.filenameFormat === 'title'
-      ? this.sanitizeFilename(title)
-      : this.sanitizeFilename(id);
+
+    // The preferred field is not guaranteed to yield a usable name: ChatGPT
+    // exports are only recognised by title/create_time/mapping, a deleted Claude
+    // conversation carries an empty name, and a title of "---" sanitises to
+    // nothing. Falling back to the other field keeps such conversations
+    // distinguishable instead of collapsing them all into "untitled".
+    const ordered = this.options.filenameFormat === 'id' ? [id, title] : [title, id];
+    const baseName =
+      ordered.map((value) => this.sanitizeFilename(value)).find((value) => value !== '') ??
+      UNTITLED;
 
     return this.deduplicate(baseName, extension);
   }
@@ -333,7 +343,12 @@ export class ConversationExporter {
     return candidate;
   }
 
+  /** Returns a usable file name, or an empty string when nothing survives. */
   private sanitizeFilename(name: string): string {
+    if (typeof name !== 'string') {
+      return '';
+    }
+
     // Replace characters that are invalid on Windows (and control characters)
     let sanitized = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '-');
 
@@ -349,9 +364,9 @@ export class ConversationExporter {
     // written name differ from the reported one.
     sanitized = sanitized.replace(/[. ]+$/, '');
 
-    // Fallback to 'untitled' if empty
+    // The caller decides what to do with an unusable name.
     if (!sanitized) {
-      return 'untitled';
+      return '';
     }
 
     // A reserved device name is rejected by Windows even with an extension.

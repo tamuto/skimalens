@@ -106,6 +106,18 @@ beforeAll(() => {
 		'utf-8',
 	);
 	fs.writeFileSync(path.join(workDir, 'notes.txt'), 'not a conversation', 'utf-8');
+
+	// Two separate exports holding different conversations under the same title.
+	fs.writeFileSync(
+		path.join(workDir, 'january.json'),
+		JSON.stringify([claudeConversation('設計メモ', 'uuid-jan')]),
+		'utf-8',
+	);
+	fs.writeFileSync(
+		path.join(workDir, 'february.json'),
+		JSON.stringify([claudeConversation('設計メモ', 'uuid-feb')]),
+		'utf-8',
+	);
 });
 
 afterAll(async () => {
@@ -172,12 +184,45 @@ describe('command line handling', () => {
 });
 
 describe('export', () => {
-	it('writes one file per conversation', () => {
+	it('names files after the conversation id by default', () => {
 		const outDir = fixturePath('out-markdown');
 		const result = runCli(['--export', outDir, fixturePath('会話ログ.json')]);
 
 		expect(result.status).toBe(0);
+		expect(fs.readdirSync(outDir).sort()).toEqual(['a.md', 'b.md']);
+	});
+
+	it('names files after the title when asked to', () => {
+		const outDir = fixturePath('out-title');
+		const result = runCli([
+			'--export',
+			outDir,
+			'--filename-format',
+			'title',
+			fixturePath('会話ログ.json'),
+		]);
+
+		expect(result.status).toBe(0);
 		expect(fs.readdirSync(outDir).sort()).toEqual(['second.md', '日本語タイトル.md']);
+	});
+
+	it('re-exporting into the same directory updates files instead of adding copies', () => {
+		const outDir = fixturePath('out-repeat');
+		for (let run = 0; run < 3; run += 1) {
+			expect(runCli(['--export', outDir, fixturePath('会話ログ.json')]).status).toBe(0);
+		}
+
+		expect(fs.readdirSync(outDir).sort()).toEqual(['a.md', 'b.md']);
+	});
+
+	it('keeps conversations from separate exports that share a title', () => {
+		// The default id naming is what makes this safe: with titles the second
+		// run would overwrite the first.
+		const outDir = fixturePath('out-merged');
+		runCli(['--export', outDir, fixturePath('january.json')]);
+		runCli(['--export', outDir, fixturePath('february.json')]);
+
+		expect(fs.readdirSync(outDir).sort()).toEqual(['uuid-feb.md', 'uuid-jan.md']);
 	});
 
 	it('reads a file saved with a UTF-8 BOM', () => {
@@ -185,18 +230,16 @@ describe('export', () => {
 		const result = runCli(['--export', outDir, fixturePath('bom.json')]);
 
 		expect(result.status).toBe(0);
-		expect(fs.readdirSync(outDir)).toEqual(['BOM付き.md']);
+		expect(fs.readdirSync(outDir)).toEqual(['c.md']);
 	});
 
-	it('exports ChatGPT conversations as YAML with id filenames', () => {
+	it('exports ChatGPT conversations as YAML named after the conversation id', () => {
 		const outDir = fixturePath('out-yaml');
 		const result = runCli([
 			'--export',
 			outDir,
 			'--export-format',
 			'yaml',
-			'--filename-format',
-			'id',
 			fixturePath('chatgpt.json'),
 		]);
 
