@@ -1,16 +1,21 @@
-#!/usr/bin/env ts-node
-
 import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
-import * as url from 'url';
 import { spawn } from 'child_process';
 import { load as yamlLoad } from 'js-yaml';
-import { MarkdownExporter, type FilenameFormat, type ExportFormat } from './exporter';
-import { DataParser } from '../src/lib/parser';
+import { ConversationExporter, type FilenameFormat, type ExportFormat } from './exporter';
+import { DataParser, stripBom } from '../src/lib/parser';
+import { getContentType, getPathname, resolveWithinRoot } from './http-paths';
+
+const DEFAULT_PORT = 8080;
+const MAX_PORT_ATTEMPTS = 20;
+// Only ever reachable from the machine running the CLI: the server hands out
+// the contents of a local file, so it must not be exposed to the network.
+const HOST = '127.0.0.1';
 
 interface ServerOptions {
   port: number;
+  portIsExplicit: boolean;
   filePath?: string;
 }
 
@@ -19,18 +24,17 @@ interface CliOptions {
   filenameFormat: FilenameFormat;
   exportFormat: ExportFormat;
   filePath?: string;
+  port?: number;
   showHelp?: boolean;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const options = parseArgs();
 
   if (options.showHelp) {
     showHelp();
     process.exit(0);
   }
-
-  const port = 8080;
 
   // Validate file if provided
   let validatedFilePath: string | undefined;
@@ -46,7 +50,7 @@ function main(): void {
       process.exit(1);
     }
 
-    exportToMarkdown(validatedFilePath, options.exportDir, options.filenameFormat, options.exportFormat);
+    await exportConversations(validatedFilePath, options.exportDir, options.filenameFormat, options.exportFormat);
     return;
   }
 
@@ -57,7 +61,11 @@ function main(): void {
     console.log('Starting SkimaLens...');
   }
 
-  startServer({ port, filePath: validatedFilePath });
+  startServer({
+    port: options.port ?? DEFAULT_PORT,
+    portIsExplicit: options.port !== undefined,
+    filePath: validatedFilePath
+  });
 }
 
 function parseArgs(): CliOptions {
@@ -89,6 +97,20 @@ function parseArgs(): CliOptions {
       continue;
     }
 
+    if (arg === '--port' || arg === '-p') {
+      if (i + 1 >= args.length) {
+        console.error('Error: --port requires a port number');
+        process.exit(1);
+      }
+      const value = Number(args[++i]);
+      if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        console.error('Error: --port must be an integer between 1 and 65535');
+        process.exit(1);
+      }
+      options.port = value;
+      continue;
+    }
+
     if (arg === '--filename-format') {
       if (i + 1 >= args.length) {
         console.error('Error: --filename-format requires a value (title or id)');
@@ -117,7 +139,7 @@ function parseArgs(): CliOptions {
       continue;
     }
 
-    if (arg.startsWith('--')) {
+    if (arg.startsWith('-') && arg !== '-') {
       console.error(`Error: Unknown option: ${arg}`);
       showHelp();
       process.exit(1);
@@ -143,6 +165,11 @@ function validateFilePath(filePath: string): string {
     process.exit(1);
   }
 
+  if (!fs.statSync(fullPath).isFile()) {
+    console.error(`Error: Not a file: ${fullPath}`);
+    process.exit(1);
+  }
+
   const ext = path.extname(fullPath).toLowerCase();
   if (!['.json', '.yaml', '.yml'].includes(ext)) {
     console.error(`Error: Unsupported file type. Please use .json, .yaml, or .yml files.`);
@@ -152,55 +179,69 @@ function validateFilePath(filePath: string): string {
   return fullPath;
 }
 
-async function exportToMarkdown(
+async function exportConversations(
   filePath: string,
   exportDir: string,
   filenameFormat: FilenameFormat,
   exportFormat: ExportFormat
 ): Promise<void> {
+  let parsedType: string;
+  let data: unknown;
+
   try {
     console.log(`Reading file: ${filePath}`);
-    const content = fs.readFileSync(filePath, 'utf-8');
+    // stripBom: files re-saved by Windows editors frequently carry a UTF-8 BOM.
+    const content = stripBom(fs.readFileSync(filePath, 'utf-8'));
 
-    // Parse file
     const ext = path.extname(filePath).toLowerCase();
-    let data: unknown;
-
-    if (ext === '.json') {
-      data = JSON.parse(content);
-    } else {
-      data = yamlLoad(content);
-    }
 
     // Detect data type
     const uploadResult = {
       filename: path.basename(filePath),
       content,
       type: ext === '.json' ? 'json' as const : 'yaml' as const,
-      size: content.length,
+      size: Buffer.byteLength(content, 'utf-8'),
       lastModified: new Date()
     };
 
     const parsed = DataParser.parseData(uploadResult);
-    console.log(`Detected data type: ${parsed.type}`);
-
-    if (parsed.type !== 'claude-conversation' && parsed.type !== 'chatgpt-conversation') {
-      console.error(`Error: Unsupported data type for export: ${parsed.type}`);
-      console.error('Only Claude and ChatGPT conversations can be exported.');
-      process.exit(1);
-    }
-
-    // Export
-    const exporter = new MarkdownExporter({
-      outputDir: exportDir,
-      filenameFormat,
-      exportFormat
-    });
-
-    await exporter.export(data, parsed.type);
-    console.log(`\nExport completed successfully to: ${path.resolve(exportDir)}`);
+    data = parsed.raw;
+    parsedType = parsed.type;
+    console.log(`Detected data type: ${parsedType}`);
   } catch (error) {
+    console.error(`Error reading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+
+  if (parsedType !== 'claude-conversation' && parsedType !== 'chatgpt-conversation') {
+    console.error(`Error: Unsupported data type for export: ${parsedType}`);
+    console.error('Only Claude and ChatGPT conversations can be exported.');
+    process.exit(1);
+  }
+
+  const exporter = new ConversationExporter({
+    outputDir: exportDir,
+    filenameFormat,
+    exportFormat
+  });
+
+  let result;
+  try {
+    result = await exporter.export(data, parsedType);
+  } catch (error) {
+    // Only setup failures (bad output directory, invalid format) land here;
+    // per-conversation failures are collected and reported below.
     console.error(`Error during export: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    process.exit(1);
+  }
+
+  console.log(`\nExported ${result.exported} conversation(s) to: ${path.resolve(exportDir)}`);
+
+  if (result.failed.length > 0) {
+    console.error(`\n${result.failed.length} conversation(s) could not be exported:`);
+    for (const failure of result.failed) {
+      console.error(`  ✗ ${failure.title}: ${failure.error}`);
+    }
     process.exit(1);
   }
 }
@@ -213,6 +254,9 @@ USAGE:
   skimalens [OPTIONS] [FILE]
 
 OPTIONS:
+  -p, --port <number>               Port for the local viewer (default: ${DEFAULT_PORT})
+                                    Without this option the next free port is used
+                                    automatically when the default one is taken.
   --export <directory>              Export conversations to files in the specified directory
   --export-format <format>          Set export format (default: markdown)
                                     - markdown: Export as Markdown files
@@ -226,6 +270,9 @@ OPTIONS:
 EXAMPLES:
   # Start web viewer with a conversation file
   skimalens conversations.json
+
+  # Start the viewer on a specific port
+  skimalens --port 3000 conversations.json
 
   # Export conversations as Markdown using titles as filenames (default)
   skimalens --export ./output conversations.json
@@ -242,85 +289,37 @@ EXAMPLES:
 }
 
 function startServer(options: ServerOptions): void {
-  const { port, filePath } = options;
-  const distPath = path.join(__dirname, '..', 'dist');
-  
+  const { portIsExplicit, filePath } = options;
+  const webRoot = path.join(__dirname, 'web');
+
   // Check if build exists
-  if (!fs.existsSync(distPath)) {
-    console.error('Error: Build not found. Please run "pnpm run build" first.');
+  if (!fs.existsSync(path.join(webRoot, 'index.html'))) {
+    console.error('Error: Web assets not found. This usually means the package was not built.');
+    console.error('If you are running from a source checkout, run "pnpm run build" first.');
     process.exit(1);
   }
 
   // Track active connections for graceful shutdown
-  const connections = new Set<any>();
+  const connections = new Set<import('net').Socket>();
 
   const server = http.createServer((req, res) => {
-    const parsedUrl = url.parse(req.url || '', true);
-    const pathname = parsedUrl.pathname || '/';
+    // Only same-origin requests from the viewer itself are expected, so no CORS
+    // headers are sent: a browser on another origin must not be able to read
+    // the response.
+    const pathname = getPathname(req.url);
 
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    // Handle API endpoint for file serving
-    if (pathname === '/api/file') {
-      console.log(`API request: ${pathname}, filePath: ${filePath}`);
-      
-      if (!filePath) {
-        console.log('No file provided to CLI');
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'No file provided to CLI' }));
-        return;
-      }
-
-      // Use async file reading for large files
-      console.log(`Reading file: ${filePath}`);
-      const fileName = path.basename(filePath);
-      
-      fs.readFile(filePath, 'utf-8', (error, fileContent) => {
-        if (error) {
-          console.error(`Error reading file: ${error}`);
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `Failed to read file: ${error}` }));
-          return;
-        }
-
-        console.log(`File read successfully, length: ${fileContent.length}`);
-        res.writeHead(200, { 
-          'Content-Type': 'application/json',
-          'X-Filename': fileName
-        });
-        res.end(JSON.stringify({ content: fileContent, filename: fileName }));
-      });
+    if (pathname === null) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
       return;
     }
 
-    // Serve static files
-    let filePath_static = path.join(distPath, pathname === '/' ? 'index.html' : pathname);
-    
-    // If file doesn't exist, serve index.html for SPA routing
-    if (!fs.existsSync(filePath_static)) {
-      filePath_static = path.join(distPath, 'index.html');
+    if (pathname === '/api/file') {
+      serveConversationFile(res, filePath);
+      return;
     }
 
-    try {
-      const stat = fs.statSync(filePath_static);
-      
-      if (stat.isFile()) {
-        const ext = path.extname(filePath_static);
-        const contentType = getContentType(ext);
-        
-        res.writeHead(200, { 'Content-Type': contentType });
-        fs.createReadStream(filePath_static).pipe(res);
-      } else {
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
-      }
-    } catch (error) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Internal Server Error');
-    }
+    serveStaticFile(res, webRoot, pathname);
   });
 
   // Track connections
@@ -331,10 +330,11 @@ function startServer(options: ServerOptions): void {
     });
   });
 
-  server.listen(port, () => {
+  listen(server, options.port, portIsExplicit, (port) => {
     const url = `http://localhost:${port}${filePath ? `/?file=cli-provided` : ''}`;
     console.log(`SkimaLens server started at ${url}`);
-    
+    console.log('Press Ctrl+C to stop.');
+
     // Open browser after a short delay
     setTimeout(() => {
       openBrowser(url);
@@ -343,28 +343,28 @@ function startServer(options: ServerOptions): void {
 
   // Handle server shutdown
   let isShuttingDown = false;
-  
+
   const gracefulShutdown = (signal: string) => {
     if (isShuttingDown) {
       console.log('\nForce shutdown...');
       process.exit(1);
     }
-    
+
     isShuttingDown = true;
     console.log(`\nReceived ${signal}. Shutting down SkimaLens server...`);
-    
+
     // Close all active connections
     for (const connection of connections) {
       connection.destroy();
     }
     connections.clear();
-    
+
     server.close(() => {
       console.log('Server closed successfully.');
       process.exit(0);
     });
-    
-    // Force shutdown after 3 seconds (reduced from 5)
+
+    // Force shutdown after 3 seconds
     setTimeout(() => {
       console.log('Force shutdown due to timeout.');
       process.exit(1);
@@ -372,24 +372,163 @@ function startServer(options: ServerOptions): void {
   };
 
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  // Never emitted on Windows, but harmless to register there.
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
 
-function getContentType(ext: string): string {
-  const types: Record<string, string> = {
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.js': 'application/javascript',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
+function listen(
+  server: http.Server,
+  startPort: number,
+  portIsExplicit: boolean,
+  onListening: (port: number) => void
+): void {
+  let port = startPort;
+  let attempt = 0;
+
+  // Registered once: a retry must not stack up another "listening" handler, or
+  // the successful attempt would report itself several times.
+  server.once('listening', () => onListening(port));
+
+  const tryListen = () => {
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EADDRINUSE') {
+        console.error(`Error: Failed to start server: ${error.message}`);
+        process.exit(1);
+      }
+
+      if (portIsExplicit) {
+        console.error(`Error: Port ${port} is already in use. Choose another port with --port.`);
+        process.exit(1);
+      }
+
+      attempt += 1;
+      if (attempt >= MAX_PORT_ATTEMPTS) {
+        console.error(
+          `Error: No free port found in range ${startPort}-${startPort + MAX_PORT_ATTEMPTS - 1}. ` +
+          'Specify one explicitly with --port.'
+        );
+        process.exit(1);
+      }
+
+      console.log(`Port ${port} is in use, trying ${port + 1}...`);
+      port += 1;
+      tryListen();
+    });
+
+    server.listen(port, HOST);
   };
-  return types[ext.toLowerCase()] || 'text/plain';
+
+  tryListen();
+}
+
+function serveConversationFile(res: http.ServerResponse, filePath: string | undefined): void {
+  if (!filePath) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'No file provided to CLI' }));
+    return;
+  }
+
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  let headersSent = false;
+  let isFirstChunk = true;
+
+  stream.on('data', (chunk) => {
+    if (!headersSent) {
+      headersSent = true;
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        // Header values must be ASCII, so non-ASCII filenames are percent-encoded
+        // and decoded again in the browser.
+        'X-Filename': encodeURIComponent(path.basename(filePath))
+      });
+    }
+
+    let text = chunk as string;
+    if (isFirstChunk) {
+      isFirstChunk = false;
+      text = stripBom(text);
+    }
+
+    if (!res.write(text)) {
+      stream.pause();
+    }
+  });
+
+  res.on('drain', () => stream.resume());
+
+  stream.on('end', () => {
+    if (!headersSent) {
+      // Empty file
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Filename': encodeURIComponent(path.basename(filePath))
+      });
+    }
+    res.end();
+  });
+
+  stream.on('error', (error) => {
+    console.error(`Error reading file: ${error.message}`);
+    if (!headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Failed to read file' }));
+    } else {
+      res.destroy();
+    }
+  });
+
+  res.on('close', () => stream.destroy());
+}
+
+function serveStaticFile(res: http.ServerResponse, webRoot: string, pathname: string): void {
+  const requested = resolveWithinRoot(webRoot, pathname);
+
+  if (requested === null) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return;
+  }
+
+  let target = requested;
+  if (!isReadableFile(target)) {
+    // Hashed build assets must 404 instead of silently returning the SPA shell,
+    // otherwise a typo in an asset URL looks like a working response.
+    if (pathname.startsWith('/static/')) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not Found');
+      return;
+    }
+    // Anything else is treated as a client-side route.
+    target = path.join(webRoot, 'index.html');
+  }
+
+  const stream = fs.createReadStream(target);
+  let headersSent = false;
+
+  stream.on('open', () => {
+    headersSent = true;
+    res.writeHead(200, { 'Content-Type': getContentType(path.extname(target)) });
+  });
+
+  stream.on('error', () => {
+    if (!headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Internal Server Error');
+    } else {
+      res.destroy();
+    }
+  });
+
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
+function isReadableFile(target: string): boolean {
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function openBrowser(url: string): void {
@@ -399,27 +538,46 @@ function openBrowser(url: string): void {
     return;
   }
 
+  const fallback = () => console.log(`\n🌐 Open this URL in your browser: ${url}\n`);
+
   try {
     if (process.platform === 'darwin') {
-      spawn('open', [url], { detached: true, stdio: 'ignore' });
+      spawn('open', [url], { detached: true, stdio: 'ignore' }).on('error', fallback).unref();
     } else if (process.platform === 'win32') {
-      spawn('start', [url], { shell: true, detached: true, stdio: 'ignore' });
+      // `start` is a cmd builtin, so cmd is invoked directly rather than through
+      // `shell: true` (which would break on URLs containing "&"). The empty
+      // string is the window title argument `start` expects first.
+      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true })
+        .on('error', fallback)
+        .unref();
     } else {
-      // Linux/Unix - try multiple approaches
-      const commands = ['xdg-open', 'sensible-browser', 'firefox', 'google-chrome', 'chromium'];
-      
-      for (const cmd of commands) {
-        try {
-          spawn(cmd, [url], { detached: true, stdio: 'ignore' });
-          break;
-        } catch (err) {
-          continue;
-        }
-      }
+      openBrowserLinux(url, fallback);
     }
-  } catch (err) {
-    console.log(`\n🌐 Open this URL in your browser: ${url}\n`);
+  } catch {
+    fallback();
   }
 }
 
-main();
+function openBrowserLinux(url: string, fallback: () => void): void {
+  const commands = ['xdg-open', 'sensible-browser', 'x-www-browser', 'firefox', 'google-chrome', 'chromium'];
+
+  const tryNext = (index: number) => {
+    if (index >= commands.length) {
+      fallback();
+      return;
+    }
+
+    // spawn only reports a missing binary asynchronously via "error", so each
+    // candidate has to be attempted in turn rather than in a plain loop.
+    const child = spawn(commands[index], [url], { detached: true, stdio: 'ignore' });
+    child.on('error', () => tryNext(index + 1));
+    child.unref();
+  };
+
+  tryNext(0);
+}
+
+main().catch((error) => {
+  console.error(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

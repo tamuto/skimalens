@@ -1,6 +1,16 @@
 import { createRootRoute, Link, Outlet } from '@tanstack/react-router';
-import { TanStackRouterDevtools } from '@tanstack/router-devtools';
+import { Suspense, lazy } from 'react';
 import { Eye, FileText } from 'lucide-react';
+
+// Kept out of the production bundle entirely: the condition folds at build time,
+// so the dynamic import is dropped along with the devtools package.
+const RouterDevtools = process.env.NODE_ENV === 'production'
+  ? () => null
+  : lazy(() =>
+      import('@tanstack/router-devtools').then((mod) => ({
+        default: mod.TanStackRouterDevtools,
+      })),
+    );
 
 export const Route = createRootRoute({
   component: () => (
@@ -33,7 +43,9 @@ export const Route = createRootRoute({
       <main className="min-h-screen bg-background">
         <Outlet />
       </main>
-      <TanStackRouterDevtools />
+      <Suspense>
+        <RouterDevtools />
+      </Suspense>
     </>
   ),
 });

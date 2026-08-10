@@ -11,6 +11,16 @@ import type {
   DataMetadata
 } from '@/types/data';
 
+/**
+ * Remove a leading UTF-8 byte order mark.
+ *
+ * Editors on Windows (Notepad, PowerShell's Out-File) routinely prepend one, and
+ * both JSON.parse and js-yaml reject the resulting document.
+ */
+export function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
 export class DataParser {
   static async parseFile(file: File): Promise<FileUploadResult> {
     const content = await this.readFileContent(file);
@@ -39,12 +49,13 @@ export class DataParser {
     if (filename.toLowerCase().endsWith('.yaml') || filename.toLowerCase().endsWith('.yml')) return 'yaml';
     
     // Content-based detection
+    const text = stripBom(content);
     try {
-      JSON.parse(content);
+      JSON.parse(text);
       return 'json';
     } catch {
       try {
-        yamlLoad(content);
+        yamlLoad(text);
         return 'yaml';
       } catch {
         return 'json'; // Default fallback
@@ -54,13 +65,14 @@ export class DataParser {
 
   static parseData(uploadResult: FileUploadResult): ParsedData {
     const startTime = new Date();
+    const content = stripBom(uploadResult.content);
     let parsed: unknown;
 
     try {
       if (uploadResult.type === 'json') {
-        parsed = JSON.parse(uploadResult.content);
+        parsed = JSON.parse(content);
       } else {
-        parsed = yamlLoad(uploadResult.content);
+        parsed = yamlLoad(content);
       }
     } catch (error) {
       throw new Error(`Failed to parse ${uploadResult.type.toUpperCase()}: ${error instanceof Error ? error.message : 'Unknown error'}`);

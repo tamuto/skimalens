@@ -20,116 +20,133 @@ export interface ExportOptions {
   exportFormat: ExportFormat;
 }
 
-export class MarkdownExporter {
+export interface ExportFailure {
+  title: string;
+  error: string;
+}
+
+export interface ExportResult {
+  exported: number;
+  failed: ExportFailure[];
+}
+
+/**
+ * Upper bound on the base name of an exported file.
+ *
+ * - Characters: Windows resolves paths against a 260 character limit unless long
+ *   paths are enabled, and the output directory consumes part of that budget.
+ * - Bytes: ext4/APFS/NTFS cap a single name at 255 bytes, and Japanese titles
+ *   cost three bytes per character, so a character limit alone is not enough.
+ */
+const MAX_BASENAME_CHARS = 80;
+const MAX_BASENAME_BYTES = 200;
+
+/** Device names that cannot be used as a file name on Windows. */
+const WINDOWS_RESERVED_NAMES = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+]);
+
+export class ConversationExporter {
   private options: ExportOptions;
+  /** Lower-cased names already written, so titles that collide get a suffix. */
+  private usedFilenames = new Set<string>();
 
   constructor(options: ExportOptions) {
     this.options = options;
   }
 
   /**
-   * Export conversations to Markdown files
+   * Export conversations to the configured output directory.
+   *
+   * A conversation that cannot be written is recorded and the run continues, so
+   * one bad title never costs the caller the remaining conversations.
    */
-  async export(data: unknown, dataType: string): Promise<void> {
+  async export(data: unknown, dataType: string): Promise<ExportResult> {
     this.ensureDirectory(this.options.outputDir);
+    this.usedFilenames.clear();
 
     if (dataType === 'claude-conversation') {
-      await this.exportClaudeData(data);
-    } else if (dataType === 'chatgpt-conversation') {
-      await this.exportChatGPTData(data);
-    } else {
-      throw new Error(`Unsupported data type for export: ${dataType}`);
+      return this.exportClaudeData(data);
     }
+    if (dataType === 'chatgpt-conversation') {
+      return this.exportChatGPTData(data);
+    }
+    throw new Error(`Unsupported data type for export: ${dataType}`);
   }
 
-  private async exportClaudeData(data: unknown): Promise<void> {
+  private async exportClaudeData(data: unknown): Promise<ExportResult> {
     const validated = DataParser.validateClaudeConversation(data);
+    const conversations: ClaudeConversations = Array.isArray(validated)
+      ? validated as ClaudeConversations
+      : [validated as ClaudeConversation];
 
-    if (Array.isArray(validated)) {
-      // Multiple conversations
-      const conversations = validated as ClaudeConversations;
-      console.log(`Exporting ${conversations.length} Claude conversations as ${this.options.exportFormat.toUpperCase()}...`);
+    console.log(`Exporting ${conversations.length} Claude conversation(s) as ${this.options.exportFormat.toUpperCase()}...`);
 
-      for (const conversation of conversations) {
-        this.exportSingleClaudeConversation(conversation);
-      }
-    } else {
-      // Single conversation
-      const conversation = validated as ClaudeConversation;
-      console.log(`Exporting Claude conversation as ${this.options.exportFormat.toUpperCase()}...`);
-      this.exportSingleClaudeConversation(conversation);
-    }
-  }
-
-  private exportSingleClaudeConversation(conversation: ClaudeConversation): void {
-    const filename = this.generateFilename(
-      conversation.name,
-      conversation.uuid,
-      this.options.filenameFormat,
-      this.options.exportFormat
+    return this.writeAll(
+      conversations,
+      (conversation) => conversation.name,
+      (conversation) => conversation.uuid,
+      (conversation) => this.convertClaudeToMarkdown(conversation)
     );
-
-    let content: string;
-    switch (this.options.exportFormat) {
-      case 'markdown':
-        content = this.convertClaudeToMarkdown(conversation);
-        break;
-      case 'json':
-        content = JSON.stringify(conversation, null, 2);
-        break;
-      case 'yaml':
-        content = yamlDump(conversation, { indent: 2, lineWidth: -1 });
-        break;
-    }
-
-    const filePath = path.join(this.options.outputDir, filename);
-    fs.writeFileSync(filePath, content, 'utf-8');
-    console.log(`  ✓ Exported: ${filename}`);
   }
 
-  private async exportChatGPTData(data: unknown): Promise<void> {
+  private async exportChatGPTData(data: unknown): Promise<ExportResult> {
     const validated = DataParser.validateChatGPTConversation(data);
+    const conversations: ChatGPTConversations = Array.isArray(validated)
+      ? validated as ChatGPTConversations
+      : [validated as ChatGPTConversation];
 
-    if (Array.isArray(validated)) {
-      // Multiple conversations
-      const conversations = validated as ChatGPTConversations;
-      console.log(`Exporting ${conversations.length} ChatGPT conversations as ${this.options.exportFormat.toUpperCase()}...`);
+    console.log(`Exporting ${conversations.length} ChatGPT conversation(s) as ${this.options.exportFormat.toUpperCase()}...`);
 
-      for (const conversation of conversations) {
-        this.exportSingleChatGPTConversation(conversation);
-      }
-    } else {
-      // Single conversation
-      const conversation = validated as ChatGPTConversation;
-      console.log(`Exporting ChatGPT conversation as ${this.options.exportFormat.toUpperCase()}...`);
-      this.exportSingleChatGPTConversation(conversation);
-    }
+    return this.writeAll(
+      conversations,
+      (conversation) => conversation.title,
+      (conversation) => conversation.id,
+      (conversation) => this.convertChatGPTToMarkdown(conversation)
+    );
   }
 
-  private exportSingleChatGPTConversation(conversation: ChatGPTConversation): void {
-    const filename = this.generateFilename(
-      conversation.title,
-      conversation.id,
-      this.options.filenameFormat,
-      this.options.exportFormat
-    );
+  private writeAll<T>(
+    conversations: T[],
+    getTitle: (conversation: T) => string,
+    getId: (conversation: T) => string,
+    toMarkdown: (conversation: T) => string
+  ): ExportResult {
+    const result: ExportResult = { exported: 0, failed: [] };
 
-    let content: string;
-    switch (this.options.exportFormat) {
-      case 'markdown':
-        content = this.convertChatGPTToMarkdown(conversation);
-        break;
-      case 'json':
-        content = JSON.stringify(conversation, null, 2);
-        break;
-      case 'yaml':
-        content = yamlDump(conversation, { indent: 2, lineWidth: -1 });
-        break;
+    for (const conversation of conversations) {
+      const title = getTitle(conversation);
+      let filename = '';
+
+      try {
+        filename = this.generateFilename(title, getId(conversation));
+
+        let content: string;
+        switch (this.options.exportFormat) {
+          case 'markdown':
+            content = toMarkdown(conversation);
+            break;
+          case 'json':
+            content = JSON.stringify(conversation, null, 2);
+            break;
+          case 'yaml':
+            content = yamlDump(conversation, { indent: 2, lineWidth: -1 });
+            break;
+        }
+
+        fs.writeFileSync(path.join(this.options.outputDir, filename), content, 'utf-8');
+        console.log(`  ✓ Exported: ${filename}`);
+        result.exported += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`  ✗ Failed: ${filename || title}: ${message}`);
+        result.failed.push({ title: title || '(untitled)', error: message });
+      }
     }
 
-    const filePath = path.join(this.options.outputDir, filename);
-    fs.writeFileSync(filePath, content, 'utf-8');
-    console.log(`  ✓ Exported: ${filename}`);
+    return result;
   }
 
   private convertClaudeToMarkdown(conversation: ClaudeConversation): string {
@@ -290,14 +307,34 @@ export class MarkdownExporter {
     return lines.join('\n');
   }
 
-  private generateFilename(title: string, id: string, format: FilenameFormat, exportFormat: ExportFormat): string {
-    const baseName = format === 'title' ? this.sanitizeFilename(title) : id;
-    const extension = exportFormat === 'markdown' ? 'md' : exportFormat;
-    return `${baseName}.${extension}`;
+  private generateFilename(title: string, id: string): string {
+    const extension = this.options.exportFormat === 'markdown' ? 'md' : this.options.exportFormat;
+    const baseName = this.options.filenameFormat === 'title'
+      ? this.sanitizeFilename(title)
+      : this.sanitizeFilename(id);
+
+    return this.deduplicate(baseName, extension);
+  }
+
+  /**
+   * Append a counter until the name is unused. Comparison is case-insensitive
+   * because Windows and macOS treat "Title.md" and "title.md" as one file.
+   */
+  private deduplicate(baseName: string, extension: string): string {
+    let candidate = `${baseName}.${extension}`;
+    let counter = 2;
+
+    while (this.usedFilenames.has(candidate.toLowerCase())) {
+      candidate = `${baseName}-${counter}.${extension}`;
+      counter += 1;
+    }
+
+    this.usedFilenames.add(candidate.toLowerCase());
+    return candidate;
   }
 
   private sanitizeFilename(name: string): string {
-    // Replace invalid filename characters
+    // Replace characters that are invalid on Windows (and control characters)
     let sanitized = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '-');
 
     // Replace multiple consecutive dashes/spaces with single dash
@@ -306,58 +343,88 @@ export class MarkdownExporter {
     // Remove leading/trailing dashes and spaces
     sanitized = sanitized.trim().replace(/^-+|-+$/g, '');
 
-    // Limit length to 200 characters
-    if (sanitized.length > 200) {
-      sanitized = sanitized.substring(0, 200);
-    }
+    sanitized = this.truncate(sanitized);
+
+    // Windows silently drops trailing dots and spaces, which would make the
+    // written name differ from the reported one.
+    sanitized = sanitized.replace(/[. ]+$/, '');
 
     // Fallback to 'untitled' if empty
     if (!sanitized) {
-      sanitized = 'untitled';
+      return 'untitled';
+    }
+
+    // A reserved device name is rejected by Windows even with an extension.
+    const stem = sanitized.split('.')[0].toUpperCase();
+    if (WINDOWS_RESERVED_NAMES.has(stem)) {
+      sanitized = `_${sanitized}`;
     }
 
     return sanitized;
   }
 
-  private ensureDirectory(dirPath: string): void {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-      console.log(`Created directory: ${dirPath}`);
+  /** Truncate to both a character and a byte budget without splitting characters. */
+  private truncate(name: string): string {
+    if (name.length <= MAX_BASENAME_CHARS && Buffer.byteLength(name, 'utf-8') <= MAX_BASENAME_BYTES) {
+      return name;
     }
+
+    let result = '';
+    let chars = 0;
+    let bytes = 0;
+
+    // Iterating the string yields whole code points, so surrogate pairs stay intact.
+    for (const char of name) {
+      const charBytes = Buffer.byteLength(char, 'utf-8');
+      if (chars + 1 > MAX_BASENAME_CHARS || bytes + charBytes > MAX_BASENAME_BYTES) {
+        break;
+      }
+      result += char;
+      chars += 1;
+      bytes += charBytes;
+    }
+
+    return result;
+  }
+
+  private ensureDirectory(dirPath: string): void {
+    if (fs.existsSync(dirPath)) {
+      if (!fs.statSync(dirPath).isDirectory()) {
+        throw new Error(`Export destination is not a directory: ${path.resolve(dirPath)}`);
+      }
+      return;
+    }
+
+    fs.mkdirSync(dirPath, { recursive: true });
+    console.log(`Created directory: ${dirPath}`);
   }
 
   private formatDate(dateString: string): string {
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      });
-    } catch {
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
       return dateString;
     }
+    return this.formatDateObject(date);
   }
 
   private formatTimestamp(timestamp: number): string {
-    try {
-      const date = new Date(timestamp * 1000);
-      return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      });
-    } catch {
+    const date = new Date(timestamp * 1000);
+    if (Number.isNaN(date.getTime())) {
       return String(timestamp);
     }
+    return this.formatDateObject(date);
+  }
+
+  private formatDateObject(date: Date): string {
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
   }
 
   private formatFileSize(bytes: number): string {

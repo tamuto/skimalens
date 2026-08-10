@@ -39,16 +39,19 @@ function Index() {
           if (!response.ok) {
             throw new Error(`Failed to load file: ${response.statusText}`);
           }
-          
-          const data = await response.json();
-          const fileContent = data.content;
-          const fileName = data.filename || 'CLI-provided file';
-          
+
+          // The server streams the file verbatim and passes the (percent-encoded,
+          // since header values must be ASCII) name out of band.
+          const encodedName = response.headers.get('X-Filename');
+          const fileName = encodedName ? decodeURIComponent(encodedName) : 'CLI-provided file';
+          const fileContent = await response.text();
+
           // Parse the file content
+          const lowerName = fileName.toLowerCase();
           const uploadResult = {
             filename: fileName,
             content: fileContent,
-            type: fileName.endsWith('.yaml') || fileName.endsWith('.yml') ? 'yaml' as const : 'json' as const,
+            type: lowerName.endsWith('.yaml') || lowerName.endsWith('.yml') ? 'yaml' as const : 'json' as const,
             size: fileContent.length,
             lastModified: new Date()
           };

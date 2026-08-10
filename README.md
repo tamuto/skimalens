@@ -53,24 +53,59 @@ SkimaLensは、構造化データを読み込んで直感的に参照・可視�
 
 ### 💻 CLI使用（推奨）
 
-SkimaLensはコマンドラインツールとして使用できます：
+SkimaLensはコマンドラインツールとして使用できます。Node.js 20以上が必要です。
 
 ```bash
 # ファイル指定なし（アップロード画面）
-pnpx @infodb/skimalens
+npx @infodb/skimalens
 
 # ファイル指定あり（直接ビューアー起動）
-pnpx @infodb/skimalens /path/to/conversation.json
-pnpx @infodb/skimalens /path/to/chatgpt-export.json
-pnpx @infodb/skimalens /path/to/data.yaml
+npx @infodb/skimalens /path/to/conversation.json
+npx @infodb/skimalens /path/to/chatgpt-export.json
+npx @infodb/skimalens /path/to/data.yaml
+
+# ポートを指定して起動（既定は8080、使用中なら自動で次の空きポートを使用）
+npx @infodb/skimalens --port 3000 /path/to/conversation.json
 ```
+
+pnpmを使う場合は `pnpm dlx @infodb/skimalens`、グローバル導入は `npm install -g @infodb/skimalens` です。
 
 #### CLI特徴
 - **🚀 独立したWebサーバー**: rsbuild/pnpmに依存しない軽量サーバー
-- **📁 直接ファイルアクセス**: ローカルファイルを安全に読み込み
+- **📦 依存関係ゼロ**: 実行に必要なコードは単一ファイルに同梱済み
+- **🔐 ローカル限定**: `127.0.0.1` のみで待ち受け、外部ネットワークからは接続不可
 - **🌐 自動ブラウザ起動**: VSCode環境でも適切に対応
-- **⚡ 高速起動**: 必要最小限の依存関係で即座に開始
 - **🛑 グレースフルシャットダウン**: Ctrl+Cで確実にサーバー停止
+
+### 📤 エクスポート
+
+会話ログをファイルに書き出せます。ブラウザは起動しません。
+
+```bash
+# Markdownとして書き出し（既定）
+npx @infodb/skimalens --export ./output conversations.json
+
+# 整形済みJSONとして書き出し
+npx @infodb/skimalens --export ./output --export-format json conversations.json
+
+# 整形済みYAML、かつ会話IDをファイル名に使用
+npx @infodb/skimalens --export ./output --export-format yaml --filename-format id conversations.json
+```
+
+| オプション | 値 | 既定 | 説明 |
+|---|---|---|---|
+| `--export <dir>` | ディレクトリパス | - | 出力先。存在しなければ作成します |
+| `--export-format` | `markdown` \| `json` \| `yaml` | `markdown` | 出力形式 |
+| `--filename-format` | `title` \| `id` | `title` | ファイル名に会話タイトルとIDのどちらを使うか |
+| `--port`, `-p` | 1-65535 | `8080` | ビューアーの待受ポート |
+
+ファイル名は自動的に安全化されます。
+
+- OSで使用できない文字を `-` に置換
+- 同名タイトルは `タイトル.md` / `タイトル-2.md` のように連番を付与（上書きしません）
+- 80文字かつ200バイトで切り詰め（日本語タイトルやWindowsのパス長制限への対応）
+- Windowsの予約デバイス名（`CON`, `AUX`, `COM1` など）は `_` を前置
+- 1件の書き出しに失敗しても処理は継続し、最後に失敗した会話の一覧を表示します
 
 ### 🛠️ 開発者向け
 
@@ -78,15 +113,36 @@ pnpx @infodb/skimalens /path/to/data.yaml
 # 依存関係をインストール
 pnpm install
 
-# 開発サーバーを起動 (通常はポート8080)
+# 開発サーバーを起動 (ポート8080)
 pnpm run dev
 
-# 本番用ビルド
-pnpm run build
+# 型チェック
+pnpm run typecheck
 
-# CLIをローカルで実行
+# 本番用ビルド（Webアセット + CLIバンドル）
+pnpm run build
+pnpm run build:web   # dist/web/ にWebアセットを出力
+pnpm run build:cli   # dist/cli.js にCLIを単一ファイルとしてバンドル
+
+# テスト（E2Eがビルド成果物を使うため、先に pnpm run build が必要）
+pnpm run test
+pnpm run test:watch
+
+# ビルド済みCLIをローカルで実行
 pnpm run cli [ファイルパス]
 ```
+
+### 🧪 テストとCI
+
+| ファイル | 対象 |
+|---|---|
+| `tests/parser.test.ts` | データ形式の判定、BOM除去、ChatGPTメッセージの並び替え |
+| `tests/exporter.test.ts` | ファイル名の安全化・重複回避・切り詰め、各出力形式、失敗時の継続 |
+| `tests/http-paths.test.ts` | リクエストパスの正規化とWebルート外へのアクセス遮断 |
+| `tests/cli.e2e.test.ts` | ビルド済みCLIの起動、エクスポート、HTTPサーバーの応答、ポート選択 |
+
+GitHub Actionsでは push / pull request ごとに Ubuntu（Node 20 / 22 / 24）と Windows（Node 20）で型チェック・ビルド・テストを実行し、
+さらに `npm pack` した成果物を空のプロジェクトにインストールして、実行時依存がゼロであることとCLIが動作することを検証しています。
 
 ## 🛠️ 技術スタック
 
@@ -145,10 +201,12 @@ pnpm run cli [ファイルパス]
 
 ## 🛡️ プライバシーとセキュリティ
 
-- **🔒 完全ローカル処理**: アップロードされたデータはブラウザ内でのみ処理
-- **📡 ネットワーク送信なし**: ファイル内容が外部サーバーに送信されることは一切ありません
+- **📡 外部送信なし**: ファイル内容が外部サーバーに送信されることは一切ありません
+- **🔒 ローカル完結**: データの解析はすべてブラウザ内で行われます
+- **🏠 ローカルホスト限定**: CLIのサーバーは `127.0.0.1` のみで待ち受けるため、同一LAN上の他の端末からは接続できません
+- **🚧 配信範囲の限定**: HTTPサーバーが返すのはビルド済みWebアセットと、コマンドラインで明示的に指定されたファイルのみです
+- **🙅 CORS無効**: レスポンスに `Access-Control-Allow-Origin` を付与しないため、他のWebサイトから内容を読み取ることはできません
 - **🗑️ セッション限定**: ページをリロードするとデータは完全に削除されます
-- **⚡ クライアントサイド分析**: 高速処理と完全なプライバシー保護を両立
 
 ## 🔧 トラブルシューティング
 
@@ -162,12 +220,19 @@ VSCode環境では自動ブラウザ起動がスキップされます。コン�
 - 2回目のCtrl+C: 強制終了
 - 大きなファイル処理中でも3秒以内に確実に停止します
 
-#### ❓ "Build not found"エラー
+#### ❓ "Web assets not found"エラー
+ソースコードから直接実行している場合に発生します。ビルドしてから実行してください。
+
 ```bash
-# ビルドを実行してからCLIを使用
 pnpm run build
 pnpm run cli /path/to/file.json
 ```
+
+npm経由でインストールした場合はWebアセットが同梱されているため、このエラーは発生しません。
+
+#### ❓ ポートが使用中
+- オプション未指定時は、8080から順に空きポートを自動で探索します（最大20回）
+- `--port` を明示した場合は自動探索せず、使用中であればエラーで終了します
 
 #### ❓ ファイルが見つからない
 - 絶対パスまたは相対パスを正確に指定してください
@@ -176,8 +241,12 @@ pnpm run cli /path/to/file.json
 ### 一般的な問題
 
 #### ❓ 大きなファイルの処理が遅い
-- ファイルサイズが45MB以上の場合、読み込みに時間がかかる場合があります
-- 非同期処理により、UIは応答可能な状態を保ちます
+- サーバーはファイルをストリーミングで返すため、数十MB程度であれば数秒以内に転送が完了します
+- そのあとのJSONパースと描画はブラウザ側で行われるため、会話件数が多いほど表示までに時間がかかります
+
+#### ❓ JSONの読み込みに失敗する
+- Windowsのメモ帳やPowerShellの `Out-File` で保存し直したファイルはUTF-8 BOMが付くことがありますが、BOMは自動的に除去されます
+- PowerShell 5.1の `Out-File` は既定でUTF-16になるため、`-Encoding utf8` を指定して保存し直してください
 
 #### ❓ 会話が正しく認識されない
 - Claude形式: `uuid`, `name`, `chat_messages`フィールドが必要
