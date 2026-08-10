@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
   const options: CliOptions = {
-    filenameFormat: 'title',
+    filenameFormat: 'id',
     exportFormat: 'markdown'
   };
 
@@ -262,9 +262,12 @@ OPTIONS:
                                     - markdown: Export as Markdown files
                                     - json: Export as formatted JSON files
                                     - yaml: Export as formatted YAML files
-  --filename-format <title|id>      Set filename format for exported files (default: title)
-                                    - title: Use conversation title as filename
-                                    - id: Use conversation ID as filename
+  --filename-format <id|title>      Set filename format for exported files (default: id)
+                                    - id: Use the conversation ID as filename. Stable across
+                                      exports, and unique, so re-exporting into the same
+                                      directory updates files instead of overwriting a
+                                      different conversation that shares a title.
+                                    - title: Use the conversation title as filename.
   -h, --help                        Show this help message
 
 EXAMPLES:
@@ -274,14 +277,14 @@ EXAMPLES:
   # Start the viewer on a specific port
   skimalens --port 3000 conversations.json
 
-  # Export conversations as Markdown using titles as filenames (default)
+  # Export conversations as Markdown using conversation IDs as filenames (default)
   skimalens --export ./output conversations.json
 
   # Export conversations as formatted JSON
   skimalens --export ./output --export-format json conversations.json
 
-  # Export conversations as formatted YAML with ID-based filenames
-  skimalens --export ./output --export-format yaml --filename-format id conversations.json
+  # Export conversations as formatted YAML with title-based filenames
+  skimalens --export ./output --export-format yaml --filename-format title conversations.json
 
   # Start web viewer without a file (upload file in browser)
   skimalens

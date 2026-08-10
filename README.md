@@ -88,23 +88,41 @@ npx @infodb/skimalens --export ./output conversations.json
 # 整形済みJSONとして書き出し
 npx @infodb/skimalens --export ./output --export-format json conversations.json
 
-# 整形済みYAML、かつ会話IDをファイル名に使用
-npx @infodb/skimalens --export ./output --export-format yaml --filename-format id conversations.json
+# 整形済みYAML、かつ会話タイトルをファイル名に使用
+npx @infodb/skimalens --export ./output --export-format yaml --filename-format title conversations.json
 ```
 
 | オプション | 値 | 既定 | 説明 |
 |---|---|---|---|
 | `--export <dir>` | ディレクトリパス | - | 出力先。存在しなければ作成します |
 | `--export-format` | `markdown` \| `json` \| `yaml` | `markdown` | 出力形式 |
-| `--filename-format` | `title` \| `id` | `title` | ファイル名に会話タイトルとIDのどちらを使うか |
+| `--filename-format` | `id` \| `title` | `id` | ファイル名に会話IDとタイトルのどちらを使うか |
 | `--port`, `-p` | 1-65535 | `8080` | ビューアーの待受ポート |
 
-ファイル名は自動的に安全化されます。
+#### ファイル名の既定は会話ID
+
+既定では会話ID（Claudeは `uuid`、ChatGPTは `id`）をファイル名に使います。Claude・ChatGPTのどちらも同じ扱いです。
+
+```
+000ad7d4-b768-4edc-8588-f935ef96cbf0.md
+002b10ec-4f74-4981-9bb9-d0007dc51147.md
+```
+
+タイトルは読みやすい反面、**会話を一意に識別できません**。実データ794会話ではタイトルの種類は712通りしかなく、82会話がタイトル重複でした。IDを既定にすることで次の性質が得られます。
+
+- **冪等性**: 同じフォルダへ何度エクスポートしても、同じIDのファイルが同じ内容で更新されるだけでファイルは増えません
+- **差分の蓄積**: 別々の時期のエクスポートを同じフォルダにまとめても、タイトルが同じ別会話が互いを消しません（タイトル形式では上書きされます）
+- **外部データとの突き合わせ**: ファイル名がそのまま会話IDなので、要約や索引を別に持つ場合の結合キーになります
+
+タイトルは出力ファイルの先頭に見出し（`# タイトル`）として残るため、`grep` や全文検索での発見性は保たれます。人が直接ブラウズしたい場合は `--filename-format title` を指定してください。
+
+#### ファイル名の安全化
 
 - OSで使用できない文字を `-` に置換
-- 同名タイトルは `タイトル.md` / `タイトル-2.md` のように連番を付与（上書きしません）
+- 同一の書き出し内で名前が衝突した場合は `名前.md` / `名前-2.md` のように連番を付与（上書きしません）
 - 80文字かつ200バイトで切り詰め（日本語タイトルやWindowsのパス長制限への対応）
 - Windowsの予約デバイス名（`CON`, `AUX`, `COM1` など）は `_` を前置
+- 指定した側（IDまたはタイトル）が空の場合はもう一方を使用し、どちらも使えない場合のみ `untitled` になります
 - 1件の書き出しに失敗しても処理は継続し、最後に失敗した会話の一覧を表示します
 
 ### 🛠️ 開発者向け
