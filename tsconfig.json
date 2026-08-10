@@ -17,5 +17,5 @@
 		"useDefineForClassFields": true,
 		"allowImportingTsExtensions": true
 	},
-	"include": ["src", "bin"]
+	"include": ["src", "bin", "tests", "scripts", "vitest.config.mts"]
 }

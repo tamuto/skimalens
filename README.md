@@ -53,7 +53,7 @@ SkimaLensは、構造化データを読み込んで直感的に参照・可視�
 
 ### 💻 CLI使用（推奨）
 
-SkimaLensはコマンドラインツールとして使用できます。Node.js 18以上が必要です。
+SkimaLensはコマンドラインツールとして使用できます。Node.js 20以上が必要です。
 
 ```bash
 # ファイル指定なし（アップロード画面）
@@ -124,9 +124,25 @@ pnpm run build
 pnpm run build:web   # dist/web/ にWebアセットを出力
 pnpm run build:cli   # dist/cli.js にCLIを単一ファイルとしてバンドル
 
+# テスト（E2Eがビルド成果物を使うため、先に pnpm run build が必要）
+pnpm run test
+pnpm run test:watch
+
 # ビルド済みCLIをローカルで実行
 pnpm run cli [ファイルパス]
 ```
+
+### 🧪 テストとCI
+
+| ファイル | 対象 |
+|---|---|
+| `tests/parser.test.ts` | データ形式の判定、BOM除去、ChatGPTメッセージの並び替え |
+| `tests/exporter.test.ts` | ファイル名の安全化・重複回避・切り詰め、各出力形式、失敗時の継続 |
+| `tests/http-paths.test.ts` | リクエストパスの正規化とWebルート外へのアクセス遮断 |
+| `tests/cli.e2e.test.ts` | ビルド済みCLIの起動、エクスポート、HTTPサーバーの応答、ポート選択 |
+
+GitHub Actionsでは push / pull request ごとに Ubuntu（Node 20 / 22 / 24）と Windows（Node 20）で型チェック・ビルド・テストを実行し、
+さらに `npm pack` した成果物を空のプロジェクトにインストールして、実行時依存がゼロであることとCLIが動作することを検証しています。
 
 ## 🛠️ 技術スタック
 

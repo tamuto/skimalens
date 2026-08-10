@@ -38,12 +38,14 @@
     "build:web": "rsbuild build",
     "build:cli": "node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "cli": "node dist/cli.js",
     "start": "pnpm run cli",
-    "prepublishOnly": "pnpm run typecheck && pnpm run build"
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run test"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "publishConfig": {
     "access": "public"
@@ -63,7 +65,7 @@
     "@types/react-dom": "^19.1.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "esbuild": "0.25.5",
+    "esbuild": "0.28.2",
     "js-yaml": "^4.1.0",
     "lucide-react": "^0.513.0",
     "react": "^19.1.0",
@@ -72,6 +74,7 @@
     "tailwind-merge": "^3.3.0",
     "tailwindcss": "^4.1.8",
     "tw-animate-css": "^1.3.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.10"
   }
 }

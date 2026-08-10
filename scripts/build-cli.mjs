@@ -15,7 +15,7 @@ await build({
 	outfile,
 	bundle: true,
 	platform: 'node',
-	target: 'node18',
+	target: 'node20',
 	format: 'cjs',
 	alias: { '@': path.join(rootDir, 'src') },
 	banner: { js: '#!/usr/bin/env node' },
