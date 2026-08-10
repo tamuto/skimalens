@@ -12,11 +12,23 @@ const webIndex = path.join(rootDir, 'dist', 'web', 'index.html');
 let workDir: string;
 const running: ChildProcessWithoutNullStreams[] = [];
 
+/** Absolute path to a file inside the throwaway working directory. */
+function fixturePath(name: string): string {
+	return path.join(workDir, name);
+}
+
+/*
+ * Child processes run with the repository as their working directory, never
+ * workDir: Windows refuses to remove a directory that a running process holds
+ * open as its cwd, which made the cleanup in afterAll fail with EBUSY. File
+ * arguments are therefore passed as absolute paths.
+ */
+
 /** Run the built CLI to completion and capture its output. */
 function runCli(args: string[]) {
 	const result = spawnSync(process.execPath, [cliPath, ...args], {
 		encoding: 'utf-8',
-		cwd: workDir,
+		cwd: rootDir,
 	});
 	return {
 		status: result.status,
@@ -31,7 +43,7 @@ function runCli(args: string[]) {
  */
 function startServer(args: string[]): Promise<{ port: number; child: ChildProcessWithoutNullStreams }> {
 	const child = spawn(process.execPath, [cliPath, ...args], {
-		cwd: workDir,
+		cwd: rootDir,
 		// Suppresses the browser launch, which would otherwise open a window on
 		// developer machines running the suite locally.
 		env: { ...process.env, TERM_PROGRAM: 'vscode' },
@@ -96,12 +108,26 @@ beforeAll(() => {
 	fs.writeFileSync(path.join(workDir, 'notes.txt'), 'not a conversation', 'utf-8');
 });
 
-afterAll(() => {
-	for (const child of running) {
-		child.kill();
-	}
+afterAll(async () => {
+	// Wait for each server to actually exit. kill() only signals, and on Windows
+	// the files a live process still holds cannot be removed.
+	await Promise.all(
+		running.map(
+			(child) =>
+				new Promise<void>((resolve) => {
+					if (child.exitCode !== null || child.signalCode !== null) {
+						resolve();
+						return;
+					}
+					child.once('exit', () => resolve());
+					child.kill();
+				}),
+		),
+	);
+
 	if (workDir) {
-		fs.rmSync(workDir, { recursive: true, force: true });
+		// Windows can still report EBUSY briefly after a process exits.
+		fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
 
@@ -127,19 +153,19 @@ describe('command line handling', () => {
 	});
 
 	it('rejects an unsupported extension', () => {
-		const result = runCli(['notes.txt']);
+		const result = runCli([fixturePath('notes.txt')]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain('Unsupported file type');
 	});
 
 	it('rejects an out-of-range port', () => {
-		const result = runCli(['--port', '99999', '会話ログ.json']);
+		const result = runCli(['--port', '99999', fixturePath('会話ログ.json')]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain('--port must be an integer');
 	});
 
 	it('requires a file when exporting', () => {
-		const result = runCli(['--export', 'out']);
+		const result = runCli(['--export', fixturePath('out-unused')]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain('File path is required');
 	});
@@ -147,23 +173,23 @@ describe('command line handling', () => {
 
 describe('export', () => {
 	it('writes one file per conversation', () => {
-		const outDir = path.join(workDir, 'out-markdown');
-		const result = runCli(['--export', outDir, '会話ログ.json']);
+		const outDir = fixturePath('out-markdown');
+		const result = runCli(['--export', outDir, fixturePath('会話ログ.json')]);
 
 		expect(result.status).toBe(0);
 		expect(fs.readdirSync(outDir).sort()).toEqual(['second.md', '日本語タイトル.md']);
 	});
 
 	it('reads a file saved with a UTF-8 BOM', () => {
-		const outDir = path.join(workDir, 'out-bom');
-		const result = runCli(['--export', outDir, 'bom.json']);
+		const outDir = fixturePath('out-bom');
+		const result = runCli(['--export', outDir, fixturePath('bom.json')]);
 
 		expect(result.status).toBe(0);
 		expect(fs.readdirSync(outDir)).toEqual(['BOM付き.md']);
 	});
 
 	it('exports ChatGPT conversations as YAML with id filenames', () => {
-		const outDir = path.join(workDir, 'out-yaml');
+		const outDir = fixturePath('out-yaml');
 		const result = runCli([
 			'--export',
 			outDir,
@@ -171,7 +197,7 @@ describe('export', () => {
 			'yaml',
 			'--filename-format',
 			'id',
-			'chatgpt.json',
+			fixturePath('chatgpt.json'),
 		]);
 
 		expect(result.status).toBe(0);
@@ -179,8 +205,8 @@ describe('export', () => {
 	});
 
 	it('refuses a data type it cannot export', () => {
-		fs.writeFileSync(path.join(workDir, 'plain.json'), JSON.stringify({ hello: 'world' }), 'utf-8');
-		const result = runCli(['--export', path.join(workDir, 'out-plain'), 'plain.json']);
+		fs.writeFileSync(fixturePath('plain.json'), JSON.stringify({ hello: 'world' }), 'utf-8');
+		const result = runCli(['--export', fixturePath('out-plain'), fixturePath('plain.json')]);
 
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain('Unsupported data type for export');
@@ -191,7 +217,7 @@ describe('viewer server', () => {
 	let port: number;
 
 	beforeAll(async () => {
-		({ port } = await startServer(['会話ログ.json']));
+		({ port } = await startServer([fixturePath('会話ログ.json')]));
 	});
 
 	it('serves the application shell', async () => {
@@ -238,29 +264,29 @@ describe('viewer server', () => {
 		expect(decodeURIComponent(encodedName as string)).toBe('会話ログ.json');
 
 		const body = await response.text();
-		expect(body).toBe(fs.readFileSync(path.join(workDir, '会話ログ.json'), 'utf-8'));
+		expect(body).toBe(fs.readFileSync(fixturePath('会話ログ.json'), 'utf-8'));
 		expect(JSON.parse(body)).toHaveLength(2);
 	});
 });
 
 describe('port selection', () => {
 	it('moves to the next free port when the default is taken', async () => {
-		const first = await startServer(['--port', '8555', '会話ログ.json']);
+		const first = await startServer(['--port', '8555', fixturePath('会話ログ.json')]);
 		expect(first.port).toBe(8555);
 
 		// Without --port the CLI probes upwards from its default; starting from an
 		// occupied explicit port is not possible, so a second default-port server
 		// is used to prove the probing works.
-		const second = await startServer(['会話ログ.json']);
-		const third = await startServer(['会話ログ.json']);
+		const second = await startServer([fixturePath('会話ログ.json')]);
+		const third = await startServer([fixturePath('会話ログ.json')]);
 		expect(third.port).toBeGreaterThan(second.port);
 	});
 
 	it('fails with a clear message when an explicit port is taken', async () => {
-		const server = await startServer(['--port', '8556', '会話ログ.json']);
+		const server = await startServer(['--port', '8556', fixturePath('会話ログ.json')]);
 		expect(server.port).toBe(8556);
 
-		const result = runCli(['--port', '8556', '会話ログ.json']);
+		const result = runCli(['--port', '8556', fixturePath('会話ログ.json')]);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain('Port 8556 is already in use');
 	});
